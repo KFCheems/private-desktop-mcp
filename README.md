@@ -4,7 +4,7 @@ Self-hosted multi-device [Model Context Protocol](https://modelcontextprotocol.i
 
 **Transport:** Streamable HTTP to ChatGPT; outgoing WebSocket from the device to the relay.
 
-## Public release (after npm owner authorizes publishing)
+## Public npm release
 
 ```powershell
 npx.cmd --yes --prefer-online @juexibobi/private-desktop-mcp@latest connect
@@ -47,7 +47,7 @@ Never protect the **entire Worker** with Worker-level Access: this would prevent
 
 - CI executes syntax tests and package validation.
 - Immutable versioned npm packages carry the authoritative `latest` dist-tag.
-- Release workflow supports **GitHub Actions OIDC npm trusted publishing**, after an npm owner manually configures this repository as a trusted publisher on npmjs.com.
+- Release workflow uses **GitHub Actions OIDC npm trusted publishing** for this repository and release.yml; no long-lived npm publish token is needed.
 - GitHub Releases preserves the same immutable `.tgz` as a backup.
 - Secrets, local `device.json`, `.env`, `node_modules` and existing Cloudflare Access policies are not stored in Git.
 

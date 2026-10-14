@@ -1,6 +1,6 @@
 {
   "name": "@juexibobi/private-desktop-mcp",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Private multi-device Desktop Commander MCP connector for Cloudflare Workers with paired WebSocket relays",
   "license": "MIT",
   "type": "module",
