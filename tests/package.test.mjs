@@ -7,7 +7,7 @@ test("package entrypoints and canonical remote URL",()=>{
  const pkg=JSON.parse(fs.readFileSync("package.json","utf8"));
  assert.equal(pkg.bin["private-desktop-mcp"],"bin/cli.mjs");
  assert.equal(pkg.private,undefined);
- assert.match(pkg.name,/^@kfcheems\/private-desktop-mcp$/);
+ assert.match(pkg.name,/^@juexibobi\/private-desktop-mcp$/);
  const cli=fs.readFileSync("bin/cli.mjs","utf8");
  assert.ok(cli.includes("private-desktop-device-relay.ljx2043979076.workers.dev"));
  assert.ok(!cli.includes("qqking.top"));

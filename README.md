@@ -7,7 +7,7 @@ Self-hosted multi-device [Model Context Protocol](https://modelcontextprotocol.i
 ## Public release (after npm owner authorizes publishing)
 
 ```powershell
-npx.cmd --yes --prefer-online @kfcheems/private-desktop-mcp@latest connect
+npx.cmd --yes --prefer-online @juexibobi/private-desktop-mcp@latest connect
 ```
 
 Each release gets its own immutable npm version. **Do not overwrite a fixed `.tgz` at a stable URL**: npm caching might start an old version.
