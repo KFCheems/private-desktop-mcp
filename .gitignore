@@ -1,0 +1,15 @@
+node_modules/
+*.tgz
+dist/
+.env
+.env.*
+!.env.example
+**/device.json
+*token*
+*.pem
+*.p12
+*.key
+*.log
+diagnostic.mjs
+worker-backup-*.mjs
+backup/

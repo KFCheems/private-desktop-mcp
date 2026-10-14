@@ -1,0 +1,29 @@
+name: Release npm and GitHub
+on:
+  push:
+    tags:
+      - 'v*'
+permissions:
+  contents: write
+  id-token: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm test
+      - name: Validate tag matches package version
+        run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
+      - name: Pack immutable GitHub Release asset
+        run: mkdir -p dist && npm pack --pack-destination dist
+      - name: Publish npm with OIDC trusted publishing
+        run: npm publish --access public --provenance
+      - name: Publish GitHub Release backup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.tgz --generate-notes --verify-tag

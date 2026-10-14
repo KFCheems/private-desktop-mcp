@@ -1,0 +1,12 @@
+name = "private-desktop-device-relay"
+main = "worker/index.mjs"
+compatibility_date = "2026-10-12"
+workers_dev = true
+
+[[durable_objects.bindings]]
+name = "HUB"
+class_name = "DeviceHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DeviceHub"]

@@ -1,0 +1,35 @@
+{
+  "name": "@kfcheems/private-desktop-mcp",
+  "version": "0.3.0",
+  "description": "Private multi-device Desktop Commander MCP connector for Cloudflare Workers with paired WebSocket relays",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20.18.1"
+  },
+  "bin": {
+    "private-desktop-mcp": "bin/cli.mjs"
+  },
+  "files": [
+    "bin/cli.mjs",
+    "gateway.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KFCheems/private-desktop-mcp.git"
+  },
+  "homepage": "https://github.com/KFCheems/private-desktop-mcp",
+  "scripts": {
+    "test": "node --check bin/cli.mjs && node --check gateway.mjs && node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@wonderwhy-er/desktop-commander": "0.2.52",
+    "mcp-proxy": "6.7.19",
+    "ws": "8.18.3",
+    "undici": "7.30.0",
+    "https-proxy-agent": "9.1.0",
+    "proxy-from-env": "2.1.0"
+  }
+}

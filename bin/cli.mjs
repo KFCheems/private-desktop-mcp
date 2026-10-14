@@ -1,0 +1,69 @@
+#!/usr/bin/env node
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import {spawn,spawnSync} from "node:child_process";
+import {fileURLToPath} from "node:url";
+import WebSocket from "ws";
+import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
+import { getProxyForUrl } from "proxy-from-env";
+import { HttpsProxyAgent } from "https-proxy-agent";
+setGlobalDispatcher(new EnvHttpProxyAgent());
+const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const command=process.argv[2]||"connect",relay="https://private-desktop-device-relay.ljx2043979076.workers.dev";
+const config=path.join(process.env.APPDATA||path.join(os.homedir(),".config"),"PrivateDesktopMCP","device.json");
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+let stopping=false,child=null,socket=null;
+function saved(){try{return JSON.parse(fs.readFileSync(config,"utf8"))}catch{return null}}
+function store(x){fs.mkdirSync(path.dirname(config),{recursive:true,mode:0o700});fs.writeFileSync(config,JSON.stringify(x,null,2),{mode:0o600});}
+function forget(){try{fs.unlinkSync(config)}catch{}}
+async function post(route,data){const r=await fetch(relay+route,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(data),signal:AbortSignal.timeout(12000)});const j=await r.json();if(!r.ok)throw Error(j.error||"HTTP "+r.status);return j;}
+async function pair(){
+ const v=await post("/relay/pair/start",{name:os.hostname()});
+ console.log("\nNEW DEVICE: "+os.hostname()+"\nPAIRING CODE: "+v.code+"\nPlease visit "+v.approvalUrl+" and approve the matching code.\nWaiting for approval (60 minutes)...\n");
+ for(let i=0;i<720&&!stopping;i++){
+  await sleep(5000);let r;try{r=await post("/relay/pair/poll",{pairId:v.pairId,proof:v.proof})}catch(e){if(/expired|invalid/i.test(e.message))throw e;continue}
+  if(r.status==="approved"){const credentials={deviceId:r.deviceId,token:r.token};store(credentials);console.log("Device approved and credentials saved.");return credentials}
+ }
+ throw Error("Pairing timed out. Re-run the command.");
+}
+async function portOpen(){const r=await fetch("http://127.0.0.1:8717/mcp",{signal:AbortSignal.timeout(1500)});return r.status>0;}
+async function startGateway(){
+ try{if(await portOpen())throw Error("Port 8717 is already occupied. Stop the other MCP gateway before connecting.")}catch(e){if(/occupied/.test(e.message))throw e}
+ const fd=fs.openSync(path.join(process.env.TEMP||os.tmpdir(),"private-desktop-mcp-device.log"),"a");
+ child=spawn(process.execPath,[path.join(root,"gateway.mjs")],{cwd:root,stdio:["ignore",fd,fd],windowsHide:true});fs.closeSync(fd);
+ for(let i=0;i<40;i++){if(child.exitCode!==null)throw Error("Gateway exited unexpectedly. See private-desktop-mcp-device.log");try{if(await portOpen())return}catch{}await sleep(500)}
+ throw Error("Gateway failed to listen on port 8717.");
+}
+function stopGateway(){if(child?.pid){if(process.platform==="win32")spawnSync("taskkill.exe",["/PID",String(child.pid),"/T","/F"],{windowsHide:true,timeout:8000});else child.kill("SIGTERM");child=null;}}
+async function respond(ws,msg){
+ const headers={};for(const k of ["accept","content-type","mcp-session-id","mcp-protocol-version","last-event-id","mcp-method","mcp-name"])if(msg.headers?.[k])headers[k]=msg.headers[k];
+ try{const rpc=JSON.parse(String(msg.body||""));if(typeof rpc.method==="string"){headers["mcp-method"]=rpc.method;if(rpc.method==="tools/call"&&typeof rpc.params?.name==="string")headers["mcp-name"]=rpc.params.name;}}catch{}
+ let response;
+ try{
+  const r=await fetch("http://127.0.0.1:8717/mcp",{method:msg.method||"POST",headers,body:msg.body,signal:AbortSignal.timeout(70000)});
+  const body=await r.text(),forward={};for(const k of ["content-type","mcp-session-id","mcp-protocol-version"])if(r.headers.has(k))forward[k]=r.headers.get(k);
+  response={kind:"response",id:msg.id,status:r.status,headers:forward,body:body.slice(0,8*1024*1024)};
+ }catch(e){response={kind:"response",id:msg.id,status:502,headers:{"content-type":"application/json"},body:JSON.stringify({error:"Local gateway error",message:String(e.message).slice(0,180)})}}
+ if(ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify(response));
+}
+async function connect(creds){return new Promise(resolve=>{
+ const proxyUrl=getProxyForUrl(relay);
+ const ws=new WebSocket(relay.replace(/^https:/,"wss:")+"/relay/ws",{headers:{"Authorization":"Bearer "+creds.token,"X-Device-ID":creds.deviceId},handshakeTimeout:15000,...(proxyUrl?{agent:new HttpsProxyAgent(proxyUrl)}:{})});socket=ws;
+ let status=0;
+ ws.on("open",()=>console.log("CONNECTED. ChatGPT can now use this device. Ctrl+C to disconnect."));
+ ws.on("unexpected-response",(req,res)=>{status=res.statusCode;res.resume();console.error("Relay refused:",status)});
+ ws.on("message",data=>{let m;try{m=JSON.parse(String(data))}catch{return}if(m.kind==="request")respond(ws,m).catch(e=>console.error(e.message))});
+ ws.on("error",e=>console.error("Relay:",e.message));
+ ws.on("close",()=>{socket=null;resolve({unauthorized:status===401})});
+})}
+function stop(){if(stopping)return;stopping=true;try{socket?.close(1000,"Manual disconnect")}catch{}stopGateway();setTimeout(()=>process.exit(0),200).unref();}
+process.on("SIGINT",stop);process.on("SIGTERM",stop);
+if(["help","--help","-h"].includes(command)){console.log("Private Desktop MCP: connect | status | reset\nFirst connect requires approval at https://private-desktop-device-relay.ljx2043979076.workers.dev/admin/devices\nCtrl+C to disconnect. No automatic startup.");}
+else if(command==="status"){console.log("Paired:",!!saved());try{console.log("Local HTTP:",(await fetch("http://127.0.0.1:8717/mcp",{signal:AbortSignal.timeout(2000)})).status)}catch{console.log("Local MCP offline")}}
+else if(command==="reset"){forget();console.log("Local credentials cleared. Revoke old credentials in the admin page too.");}
+else if(command==="connect"){
+ try{const credentials=saved()||await pair();await startGateway();let retries=0;
+  while(!stopping){const r=await connect(credentials);if(r.unauthorized){forget();console.error("Credentials revoked; run again to pair.");break}if(stopping)break;retries++;const ms=Math.min(30000,1500*2**Math.min(5,retries));console.log("Reconnecting in "+Math.ceil(ms/1000)+"s");await sleep(ms);}
+ }catch(e){console.error("ERROR:",e.message);process.exitCode=1}finally{stopGateway()}
+}else{console.error("Unknown command. Use help");process.exitCode=2}
