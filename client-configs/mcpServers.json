@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "private-desktop": {
+      "type": "http",
+      "url": "https://private-desktop-device-relay.ljx2043979076.workers.dev/mcp"
+    }
+  }
+}
