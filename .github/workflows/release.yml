@@ -1,7 +1,6 @@
 name: Release npm and GitHub
 on:
   push:
-    branches: [main]
     tags:
       - 'v*'
 permissions:
@@ -9,7 +8,6 @@ permissions:
   id-token: write
 jobs:
   release:
-    if: "github.ref_type == 'tag' || (github.ref == 'refs/heads/main' && github.event.head_commit.message == 'chore(release): retry PCC 0.3.2 via OIDC')"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,13 +18,7 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm test
       - name: Validate tag matches package version
-        run: |
-          VERSION="$(node -p 'require("./package.json").version')"
-          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            test "v$VERSION" = "$GITHUB_REF_NAME"
-          else
-            test "$VERSION" = "0.3.2"
-          fi
+        run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
       - name: Pack immutable GitHub Release asset
         run: mkdir -p dist && npm pack --pack-destination dist
       - name: Publish npm with OIDC trusted publishing (skip pre-published initial version)
@@ -42,11 +34,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v$(node -p 'require("./package.json").version')"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/*.tgz --clobber
-          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            gh release create "$TAG" dist/*.tgz --generate-notes --verify-tag
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/*.tgz --clobber
           else
-            gh release create "$TAG" dist/*.tgz --generate-notes --target "$GITHUB_SHA"
+            gh release create "$GITHUB_REF_NAME" dist/*.tgz --generate-notes --verify-tag
           fi
