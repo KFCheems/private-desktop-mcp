@@ -9,7 +9,7 @@ permissions:
   id-token: write
 jobs:
   release:
-    if: github.ref_type == 'tag' || (github.ref == 'refs/heads/main' && github.event.head_commit.message == 'chore(release): publish PCC 0.3.2 via OIDC')
+    if: "github.ref_type == 'tag' || (github.ref == 'refs/heads/main' && github.event.head_commit.message == 'chore(release): retry PCC 0.3.2 via OIDC')"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
