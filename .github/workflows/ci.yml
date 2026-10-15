@@ -18,3 +18,18 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm test
       - run: npm pack --dry-run --json
+      - name: Test fresh packed install with nested dependencies
+        run: |
+          mkdir -p "$RUNNER_TEMP/pcc-fresh"
+          npm pack --pack-destination "$RUNNER_TEMP/pcc-fresh" --silent
+          cd "$RUNNER_TEMP/pcc-fresh"
+          npm install --ignore-scripts --no-audit --no-fund --install-strategy=nested ./*.tgz
+          node -e '
+            const { createRequire } = require("node:module");
+            const { resolve } = require("node:path");
+            const gateway = createRequire(resolve("node_modules/@juexibobi/private-desktop-mcp/gateway.mjs"));
+            for (const pkg of ["@modelcontextprotocol/client", "@modelcontextprotocol/server"]) {
+              console.log(pkg, gateway.resolve(pkg));
+            }
+            console.log("Fresh gateway imports OK");
+          '
