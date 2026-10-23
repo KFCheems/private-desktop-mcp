@@ -7,10 +7,22 @@ Self-hosted multi-device [Model Context Protocol](https://modelcontextprotocol.i
 ## Public npm release
 
 ```powershell
-npx.cmd --yes --prefer-online @juexibobi/private-desktop-mcp@latest connect
+npx.cmd --yes --prefer-online --package=@juexibobi/private-desktop-mcp@latest -- private-desktop-mcp connect
 ```
 
 Each release gets its own immutable npm version. **Do not overwrite a fixed `.tgz` at a stable URL**: npm caching might start an old version.
+
+### Terminal logging
+
+The default `connect` command displays timestamped connection events, local gateway startup, incoming MCP method/tool names, HTTP/RPC success or failure, execution durations and reconnect activity. The terminal stays open for live monitoring.
+
+For more details, use `--debug`:
+
+```powershell
+npx.cmd --yes --prefer-online --package=@juexibobi/private-desktop-mcp@latest -- private-desktop-mcp connect --debug
+```
+
+Debug mode prints **redacted parameter metadata and response size/type**, not command contents, file contents or raw tool results. Sensitive fields and inline tokens are masked, but local paths and other non-sensitive metadata may still appear, so avoid sharing debug logs publicly. The child gateway's detailed stderr/stdout is still stored at `%TEMP%\private-desktop-mcp-device.log`. Neither logging mode changes device pairing, OAuth or startup behavior.
 
 ## Current independent endpoint
 
