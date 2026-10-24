@@ -110,3 +110,13 @@ export function shortCallId(id){
 export function formatElapsed(ms){
  return ms>=1000?(ms/1000).toFixed(2)+"s":ms+"ms";
 }
+
+/** Terminal logging defaults to TRACE unless explicitly reduced. */
+export function loggingOptions(args=[]){
+ const flags=new Set(args);
+ const safe=flags.has("--safe");
+ const debugOnly=flags.has("--debug")&&!flags.has("--trace");
+ const trace=!safe&&!debugOnly;
+ const debug=!safe&&(debugOnly||trace);
+ return {trace,debug,mode:trace?"TRACE":debug?"DEBUG":"LIVE"};
+}

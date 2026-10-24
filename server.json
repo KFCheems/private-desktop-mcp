@@ -1,13 +1,13 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.kfcheems/private-desktop-mcp",
-  "title": "Private Desktop MCP",
-  "description": "Private Cloudflare Access-protected multi-device remote Desktop Commander server",
-  "version": "0.3.5",
-  "remotes": [
-    {
-      "type": "streamable-http",
-      "url": "https://private-desktop-device-relay.ljx2043979076.workers.dev/mcp"
-    }
-  ]
+    "$schema":  "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+    "name":  "io.github.kfcheems/private-desktop-mcp",
+    "title":  "Private Desktop MCP",
+    "description":  "Private Cloudflare Access-protected multi-device remote Desktop Commander server",
+    "version":  "0.3.6",
+    "remotes":  [
+                    {
+                        "type":  "streamable-http",
+                        "url":  "https://private-desktop-device-relay.ljx2043979076.workers.dev/mcp"
+                    }
+                ]
 }

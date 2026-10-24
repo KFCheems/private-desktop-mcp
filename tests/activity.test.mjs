@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {parseRpc,callInfo,requestBrief,requestDebug,responseBrief,safeTraceRequest,safeTraceOutput,shortCallId,formatElapsed} from "../bin/activity.mjs";
+import {parseRpc,callInfo,requestBrief,requestDebug,responseBrief,safeTraceRequest,safeTraceOutput,shortCallId,formatElapsed,loggingOptions} from "../bin/activity.mjs";
 
 const request=(name,args)=>JSON.stringify({jsonrpc:"2.0",id:7,method:"tools/call",params:{name,arguments:args}});
 const reply=(result)=>JSON.stringify({jsonrpc:"2.0",id:7,result});
@@ -74,4 +74,15 @@ test("duration and response length are bounded",()=>{
  assert.equal(out.failed,true);
  assert.equal(out.kind,"non-JSON response");
  assert.equal(parseRpc("{}", "application/json")?.error,undefined);
+});
+
+test("TRACE is default without optional logging flags",()=>{
+ for(const args of [[],["connect"],["connect","--trace"]]){
+  assert.deepEqual(loggingOptions(args),{trace:true,debug:true,mode:"TRACE"});
+ }
+});
+test("explicit logging reductions preserve user control",()=>{
+ assert.deepEqual(loggingOptions(["connect","--debug"]),{trace:false,debug:true,mode:"DEBUG"});
+ assert.deepEqual(loggingOptions(["connect","--safe"]),{trace:false,debug:false,mode:"LIVE"});
+ assert.deepEqual(loggingOptions(["connect","--safe","--trace"]),{trace:false,debug:false,mode:"LIVE"});
 });
