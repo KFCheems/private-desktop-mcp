@@ -50,6 +50,6 @@ export function rpcOutcome(body,contentType=""){
 }
 export function logLine(level,message){
  const tag={info:"INFO",warn:"WARN",error:"ERROR",debug:"DEBUG"}[level]||"INFO";
- const output="["+timestamp()+"] ["+tag+"] "+sanitizeText(message,800);
+ const output="["+timestamp()+"] ["+tag+"] "+sanitizeText(message,1550);
  if(level==="error")console.error(output);else console.log(output);
 }

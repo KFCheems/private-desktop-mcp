@@ -72,3 +72,24 @@ Never protect the **entire Worker** with Worker-level Access: this would prevent
 ## Security
 
 This tool has Windows filesystem and command-execution capabilities. Restrict Cloudflare Access to your own identity, approve only devices you control and never expose a naked HTTP MCP endpoint. See [SECURITY.md](SECURITY.md).
+
+
+## Detailed live console (v0.3.5)
+
+PCC now displays an expanded terminal startup banner with computer, device ID, Node version, gateway PID, local MCP URL, Cloudflare relay state and logging mode. Every incoming MCP method/tool call has a short correlation ID, safe parameter summary, MCP/HTTP outcome, duration and structured result summaries (process PID, exit code, line count and output size when available). WebSocket disconnections include close code, connection uptime, total calls and failures. A tool can fail at the MCP layer even when HTTP returns 200; this is reported as an **MCP tool error**.
+
+Logging has three levels:
+
+| Command option | Terminal contents | Privacy |
+| --- | --- | --- |
+| No option | Rich startup, call and response summaries; no raw files/commands | Default |
+| \`--debug\` | Adds redacted request metadata, result sizes and aggregate counters | Safe diagnostic metadata |
+| \`--trace\` | Also shows sanitized, truncated command and response previews | **Local opt-in; may expose confidential user text** |
+
+Example for full local previews (not recommended when screen sharing or saving terminal transcripts):
+
+\`\`\`powershell
+npx.cmd --yes --prefer-online --package=@juexibobi/private-desktop-mcp@latest -- private-desktop-mcp connect --trace
+\`\`\`
+
+**Important:** \`--trace\` is best-effort redaction, not a guarantee that arbitrary secrets embedded in file contents or command results will be removed. Use normal logging or \`--debug\` for everyday use. All logs print to the local terminal and are not transmitted to third-party logging services by this feature. The underlying gateway's diagnostics remain in \`%TEMP%\private-desktop-mcp-device.log\`.
