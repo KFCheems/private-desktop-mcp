@@ -5,20 +5,40 @@ import os from "node:os";
 import {spawn,spawnSync} from "node:child_process";
 import {fileURLToPath} from "node:url";
 import WebSocket from "ws";
-import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
-import { getProxyForUrl } from "proxy-from-env";
+import { ProxyAgent } from "undici";
+import { resolveProxyForUrl } from "./proxy.mjs";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { logLine, rpcDescription, rpcOutcome, sanitizeText } from "./logging.mjs";
-setGlobalDispatcher(new EnvHttpProxyAgent());
+
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const command=process.argv.slice(2).find(a=>!a.startsWith("--"))||"connect",debug=process.argv.includes("--debug"),relay="https://private-desktop-device-relay.ljx2043979076.workers.dev";
 const config=path.join(process.env.APPDATA||path.join(os.homedir(),".config"),"PrivateDesktopMCP","device.json");
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+let currentProxy=null,proxyCheckedAt=0,lastProxyNotice="";
+const agents=new Map();
+function remoteTransport(){
+ if(!currentProxy||Date.now()-proxyCheckedAt>10000){
+  currentProxy=resolveProxyForUrl(relay);
+  proxyCheckedAt=Date.now();
+  if(currentProxy.mode==="unsupported")throw Error(currentProxy.reason+" (use an HTTP/Mixed port via system settings or HTTPS_PROXY)");
+  const notice=currentProxy.mode==="proxy"?"🌐 Proxy: "+currentProxy.source+" ("+currentProxy.description+")":
+   currentProxy.mode==="unavailable"?"⚠️ Proxy detection unavailable: "+currentProxy.reason+"; trying direct":
+   "🌐 Direct connection ("+currentProxy.source+")";
+  if(notice!==lastProxyNotice){logLine(currentProxy.mode==="unavailable"?"warn":"info",notice);lastProxyNotice=notice}
+ }
+ if(currentProxy.mode!=="proxy")return {};
+ let transport=agents.get(currentProxy.url);
+ if(!transport){
+  transport={dispatcher:new ProxyAgent(currentProxy.url),wsAgent:new HttpsProxyAgent(currentProxy.url)};
+  agents.set(currentProxy.url,transport);
+ }
+ return transport;
+}
 let stopping=false,child=null,socket=null;
 function saved(){try{return JSON.parse(fs.readFileSync(config,"utf8"))}catch{return null}}
 function store(x){fs.mkdirSync(path.dirname(config),{recursive:true,mode:0o700});fs.writeFileSync(config,JSON.stringify(x,null,2),{mode:0o600});}
 function forget(){try{fs.unlinkSync(config)}catch{}}
-async function post(route,data){const r=await fetch(relay+route,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(data),signal:AbortSignal.timeout(12000)});const j=await r.json();if(!r.ok)throw Error(j.error||"HTTP "+r.status);return j;}
+async function post(route,data){const {dispatcher}=remoteTransport();const r=await fetch(relay+route,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(data),signal:AbortSignal.timeout(12000),...(dispatcher?{dispatcher}:{})});const j=await r.json();if(!r.ok)throw Error(j.error||"HTTP "+r.status);return j;}
 async function pair(){
  const v=await post("/relay/pair/start",{name:os.hostname()});
  logLine("info","🔑 New device pairing requested");
@@ -59,9 +79,9 @@ async function respond(ws,msg){
  if(ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify(response));
 }
 async function connect(creds){return new Promise(resolve=>{
- const proxyUrl=getProxyForUrl(relay);
+ const {wsAgent}=remoteTransport();
  logLine("info","🌐 Connecting to Cloudflare relay...");
- const ws=new WebSocket(relay.replace(/^https:/,"wss:")+"/relay/ws",{headers:{"Authorization":"Bearer "+creds.token,"X-Device-ID":creds.deviceId},handshakeTimeout:15000,...(proxyUrl?{agent:new HttpsProxyAgent(proxyUrl)}:{})});socket=ws;
+ const ws=new WebSocket(relay.replace(/^https:/,"wss:")+"/relay/ws",{headers:{"Authorization":"Bearer "+creds.token,"X-Device-ID":creds.deviceId},handshakeTimeout:15000,...(wsAgent?{agent:wsAgent}:{})});socket=ws;
  let status=0;
  ws.on("open",()=>{logLine("info","✅ Connected to Cloudflare relay");logLine("info","🟢 Device online: "+os.hostname());console.log("CONNECTED. ChatGPT can now use this device. Ctrl+C to disconnect.");});
  ws.on("unexpected-response",(req,res)=>{status=res.statusCode;res.resume();logLine("error","Relay refused: HTTP "+status)});
@@ -75,7 +95,7 @@ if(["help","--help","-h"].includes(command)){console.log("Private Desktop MCP: c
 else if(command==="status"){console.log("Paired:",!!saved());try{console.log("Local HTTP:",(await fetch("http://127.0.0.1:8717/mcp",{signal:AbortSignal.timeout(2000)})).status)}catch{console.log("Local MCP offline")}}
 else if(command==="reset"){forget();console.log("Local credentials cleared. Revoke old credentials in the admin page too.");}
 else if(command==="connect"){
- logLine("info","PCC v0.3.3 starting ("+(debug?"debug":"normal")+" logging)");
+ logLine("info","PCC v0.3.4 starting ("+(debug?"debug":"normal")+" logging)");
  try{const credentials=saved()||await pair();if(saved())logLine("info","💾 Stored device pairing found");await startGateway();let retries=0;
   while(!stopping){const r=await connect(credentials);if(r.unauthorized){forget();logLine("error","Credentials revoked; run again to pair.");break}if(stopping)break;retries++;const ms=Math.min(30000,1500*2**Math.min(5,retries));logLine("warn","Reconnecting in "+Math.ceil(ms/1000)+"s");await sleep(ms);}
  }catch(e){logLine("error","ERROR: "+sanitizeText(e.message,250));process.exitCode=1}finally{stopGateway()}

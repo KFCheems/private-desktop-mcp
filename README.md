@@ -22,6 +22,12 @@ For more details, use `--debug`:
 npx.cmd --yes --prefer-online --package=@juexibobi/private-desktop-mcp@latest -- private-desktop-mcp connect --debug
 ```
 
+### Windows system proxy detection (v0.3.4)
+
+PCC automatically uses the current Windows user's **effective system proxy** (WinINET), including static HTTP/Mixed proxies, Windows proxy bypass rules, and supported PAC/WPAD configurations. It uses the same detected proxy for the HTTPS device-pairing API and for the secure WebSocket relay. No manual `HTTPS_PROXY` configuration is required for normal Windows system proxy settings.
+
+Explicit `HTTPS_PROXY`, `HTTP_PROXY` or `ALL_PROXY` settings take precedence over Windows settings; `NO_PROXY` exclusions are respected for an explicitly configured environment proxy. Supported proxy transport is HTTP/HTTPS CONNECT. SOCKS-only proxy endpoints must be exposed through an HTTP/Mixed port. The detected proxy is re-checked periodically when retrying a lost connection. If system lookup fails or times out, PCC reports a warning and tries a direct connection.
+
 Debug mode prints **redacted parameter metadata and response size/type**, not command contents, file contents or raw tool results. Sensitive fields and inline tokens are masked, but local paths and other non-sensitive metadata may still appear, so avoid sharing debug logs publicly. The child gateway's detailed stderr/stdout is still stored at `%TEMP%\private-desktop-mcp-device.log`. Neither logging mode changes device pairing, OAuth or startup behavior.
 
 ## Current independent endpoint
