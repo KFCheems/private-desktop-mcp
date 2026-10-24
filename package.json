@@ -29,7 +29,7 @@
   "dependencies": {
     "@wonderwhy-er/desktop-commander": "0.2.52",
     "mcp-proxy": "6.7.19",
-    "ws": "8.18.3",
+    "ws": "8.22.0",
     "undici": "7.30.0",
     "https-proxy-agent": "9.1.0",
     "proxy-from-env": "2.1.0",
