@@ -9,10 +9,11 @@ import { ProxyAgent } from "undici";
 import { resolveProxyForUrl } from "./proxy.mjs";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { logLine, sanitizeText } from "./logging.mjs";
-import { callInfo, requestBrief, requestDebug, responseBrief, safeTraceRequest, safeTraceOutput, shortCallId, formatElapsed } from "./activity.mjs";
+import { callInfo, requestBrief, requestDebug, responseBrief, safeTraceRequest, safeTraceOutput, shortCallId, formatElapsed, loggingOptions } from "./activity.mjs";
 
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const command=process.argv.slice(2).find(a=>!a.startsWith("--"))||"connect",trace=process.argv.includes("--trace"),debug=process.argv.includes("--debug")||trace,relay="https://private-desktop-device-relay.ljx2043979076.workers.dev";
+const command=process.argv.slice(2).find(a=>!a.startsWith("--"))||"connect",relay="https://private-desktop-device-relay.ljx2043979076.workers.dev";
+const {trace,debug}=loggingOptions(process.argv.slice(2));
 const config=path.join(process.env.APPDATA||path.join(os.homedir(),".config"),"PrivateDesktopMCP","device.json");
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 let currentProxy=null,proxyCheckedAt=0,lastProxyNotice="";
@@ -129,11 +130,11 @@ async function connect(creds){return new Promise(resolve=>{
 })}
 function stop(){if(stopping)return;stopping=true;logLine("info","Disconnecting PCC...");try{socket?.close(1000,"Manual disconnect")}catch{}stopGateway();setTimeout(()=>process.exit(0),200).unref();}
 process.on("SIGINT",stop);process.on("SIGTERM",stop);
-if(["help","--help","-h"].includes(command)){console.log("Private Desktop MCP: connect | status | reset [--debug | --trace]\nUse --debug for safe metadata; --trace shows redacted/truncated content previews (may contain private data).\nFirst connect requires approval at https://private-desktop-device-relay.ljx2043979076.workers.dev/admin/devices\nCtrl+C to disconnect. No automatic startup.");}
+if(["help","--help","-h"].includes(command)){console.log("Private Desktop MCP: connect | status | reset [--safe | --debug | --trace]\nDefault: TRACE logs with redacted/truncated command and response previews (may contain private data).\nUse --safe for compact metadata-only logs, or --debug for detailed metadata without content previews.\nFirst connect requires approval at https://private-desktop-device-relay.ljx2043979076.workers.dev/admin/devices\nCtrl+C to disconnect. No automatic startup.");}
 else if(command==="status"){console.log("Paired:",!!saved());try{console.log("Local HTTP:",(await fetch("http://127.0.0.1:8717/mcp",{signal:AbortSignal.timeout(2000)})).status)}catch{console.log("Local MCP offline")}}
 else if(command==="reset"){forget();console.log("Local credentials cleared. Revoke old credentials in the admin page too.");}
 else if(command==="connect"){
- logLine("info","╔══════════════ PCC REMOTE v0.3.5 ══════════════╗");
+ logLine("info","╔══════════════ PCC REMOTE v0.3.6 ══════════════╗");
  logLine("info","Logging: "+(trace?"TRACE":debug?"DEBUG":"LIVE")+" | Gateway: Desktop Commander MCP");
  if(trace)logLine("warn","TRACE mode can display private user content in this terminal; do not share these logs.");
  logLine("info","╚═══════════════════════════════════════════════╝");
