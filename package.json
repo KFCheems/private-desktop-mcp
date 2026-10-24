@@ -1,6 +1,6 @@
 {
   "name": "@juexibobi/private-desktop-mcp",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Private multi-device Desktop Commander MCP connector for Cloudflare Workers with paired WebSocket relays",
   "license": "MIT",
   "type": "module",
@@ -12,6 +12,7 @@
   },
   "files": [
     "bin/cli.mjs",
+    "bin/activity.mjs",
     "bin/proxy.mjs",
     "bin/logging.mjs",
     "gateway.mjs",
