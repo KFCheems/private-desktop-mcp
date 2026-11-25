@@ -187,7 +187,7 @@ test("allow-dir jail recognizes snake_case file_path used by Desktop Commander e
   }
 });
 
-test("readonly mode authorizes callable tools via client-supplied readOnlyHint annotations", () => {
+test("readonly mode ignores client-supplied readOnlyHint annotations", () => {
   const policy = createPolicy({ readonly: true });
   const annotatedCall = {
     jsonrpc: "2.0",
@@ -199,13 +199,25 @@ test("readonly mode authorizes callable tools via client-supplied readOnlyHint a
       _meta: { annotations: { readOnlyHint: true, destructiveHint: false } }
     }
   };
-  assert.equal(evaluateToolCall(annotatedCall, policy).allowed, true);
+  assert.equal(evaluateToolCall(annotatedCall, policy).allowed, false);
+  // Even a statically known write tool cannot be unlocked by a caller-supplied hint.
+  const hintedWrite = {
+    jsonrpc: "2.0",
+    id: 10,
+    method: "tools/call",
+    params: {
+      name: "write_file",
+      arguments: { path: "/tmp/a.txt", content: "hi" },
+      _meta: { annotations: { readOnlyHint: true, destructiveHint: false } }
+    }
+  };
+  assert.equal(evaluateToolCall(hintedWrite, policy).allowed, false);
   // A tool with no annotation and not in the static set stays blocked
   assert.equal(evaluateToolCall(call("winremote__shell"), policy).allowed, false);
   // A destructive annotation is not honored as read-only
   const destructive = {
     jsonrpc: "2.0",
-    id: 10,
+    id: 11,
     method: "tools/call",
     params: { name: "winremote__wipe", arguments: {}, _meta: { annotations: { readOnlyHint: true, destructiveHint: true } } }
   };

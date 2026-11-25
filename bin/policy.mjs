@@ -136,9 +136,9 @@ export function evaluateToolCall(rpc, policy, { platform = process.platform } = 
   const toolName = typeof rpc.params?.name === "string" ? rpc.params.name : "";
   const args = rpc.params?.arguments && typeof rpc.params.arguments === "object" ? rpc.params.arguments : {};
 
-  const callAnnotations =
-    rpc.params?._meta?.annotations && typeof rpc.params._meta.annotations === "object" ? rpc.params._meta.annotations : null;
-  const annotations = callAnnotations || policy.toolAnnotations?.get(toolName) || null;
+  // Only trust annotations learned from the upstream tools/list response. A caller can
+  // freely put whatever it likes in params._meta, so those hints are not authoritative.
+  const annotations = policy.toolAnnotations?.get(toolName) || null;
   if (!isToolAllowedByName(toolName, policy, annotations)) {
     const modeReason = policy.readonly ? "connector is running in --readonly mode" : "tool is disallowed by local policy";
     return { allowed: false, reason: `Blocked locally: "${toolName}" is not permitted (${modeReason}).` };

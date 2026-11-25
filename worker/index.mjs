@@ -179,11 +179,17 @@ function jsonRpcResult(id, payload, isError = false) {
 // discover/call the relay meta-tools even when no downstream device is online or when
 // multiple devices are online with none selected. Without this, the initial initialize
 // would be forwarded downstream and get a 503/409, leaving the client unable to select.
+export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
+
 function buildInitializeResult(rpc) {
   const requested = rpc?.params?.protocolVersion;
+  // Negotiate only within versions the relay actually supports; never echo an unknown
+  // client-supplied version back as if it were supported.
+  const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS.includes(requested)
+    ? requested
+    : SUPPORTED_PROTOCOL_VERSIONS[0];
   return {
-    // Echo the client's requested version when present so the handshake negotiates cleanly.
-    protocolVersion: typeof requested === "string" && requested ? requested : "2025-06-18",
+    protocolVersion,
     capabilities: { tools: { listChanged: false } },
     serverInfo: { name: "private-desktop-mcp-relay", version: WORKER_VERSION }
   };
@@ -971,8 +977,14 @@ export class DeviceHub {
 
     // Answer initialize locally when there is no clear online target so the client can
     // still complete the handshake and discover relay meta-tools (see buildInitializeResult).
-    if (mcpMethod === "initialize" && (!id || !online.has(id))) {
-      this.recordAudit({ actor, mcpMethod: "initialize", mcpName: "", status: 200, durationMs: Date.now() - started, ok: true });
+    if ((mcpMethod === "initialize" || mcpMethod === "notifications/initialized") && (!id || !online.has(id))) {
+      if (mcpMethod === "notifications/initialized") {
+        // Notifications have no JSON-RPC id and must not receive a JSON-RPC result, but
+        // the local handshake still needs to accept them so the client can proceed.
+        this.recordAudit({ actor, mcpMethod, mcpName: "", status: 202, durationMs: Date.now() - started, ok: true });
+        return new Response(null, { status: 202 });
+      }
+      this.recordAudit({ actor, mcpMethod, mcpName: "", status: 200, durationMs: Date.now() - started, ok: true });
       return json({ jsonrpc: "2.0", id: rpc?.id ?? null, result: buildInitializeResult(rpc) });
     }
 
