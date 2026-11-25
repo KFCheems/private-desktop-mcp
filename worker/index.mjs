@@ -175,6 +175,20 @@ function jsonRpcResult(id, payload, isError = false) {
   });
 }
 
+// Answer MCP `initialize` locally so a client can complete the handshake and then
+// discover/call the relay meta-tools even when no downstream device is online or when
+// multiple devices are online with none selected. Without this, the initial initialize
+// would be forwarded downstream and get a 503/409, leaving the client unable to select.
+function buildInitializeResult(rpc) {
+  const requested = rpc?.params?.protocolVersion;
+  return {
+    // Echo the client's requested version when present so the handshake negotiates cleanly.
+    protocolVersion: typeof requested === "string" && requested ? requested : "2025-06-18",
+    capabilities: { tools: { listChanged: false } },
+    serverInfo: { name: "private-desktop-mcp-relay", version: WORKER_VERSION }
+  };
+}
+
 function injectMetaToolsIntoBody(bodyText, contentType = "") {
   const appendMissing = (obj) => {
     if (!obj || typeof obj !== "object" || !Array.isArray(obj.result?.tools)) return null;
@@ -953,6 +967,13 @@ export class DeviceHub {
     if (!id) {
       id = selected;
       if (id && !online.has(id) && online.size === 1) id = online.keys().next().value;
+    }
+
+    // Answer initialize locally when there is no clear online target so the client can
+    // still complete the handshake and discover relay meta-tools (see buildInitializeResult).
+    if (mcpMethod === "initialize" && (!id || !online.has(id))) {
+      this.recordAudit({ actor, mcpMethod: "initialize", mcpName: "", status: 200, durationMs: Date.now() - started, ok: true });
+      return json({ jsonrpc: "2.0", id: rpc?.id ?? null, result: buildInitializeResult(rpc) });
     }
 
     // If tools/list arrives with 0 devices online or ambiguous multi-device selection, still return relay meta-tools!
