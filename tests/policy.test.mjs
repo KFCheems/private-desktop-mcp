@@ -94,6 +94,9 @@ test("filterToolsListBody removes disallowed tools in JSON and SSE and respects 
     filteredJson.result.tools.map((t) => t.name),
     ["read_file", "winremote__snapshot"]
   );
+  // Learned readOnlyHint tools must remain callable in --readonly mode
+  assert.equal(evaluateToolCall(call("winremote__snapshot"), policy).allowed, true);
+  assert.equal(evaluateToolCall(call("winremote__shell"), policy).allowed, false);
 
   const sseBody = `event: message\ndata: ${jsonBody}\n\n`;
   const filteredSse = filterToolsListBody(sseBody, "text/event-stream", policy);

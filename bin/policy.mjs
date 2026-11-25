@@ -110,6 +110,7 @@ export function createPolicy({
     denyTools: new Set(denyTools.map((s) => String(s).trim()).filter(Boolean)),
     allowDirs: allowDirs.map((d) => path.resolve(String(d).trim())).filter(Boolean),
     protectedDirs: protectedDirs.map((d) => path.resolve(String(d).trim())).filter(Boolean),
+    learnedReadOnlyTools: new Set(),
     dlp: Boolean(dlp)
   };
 }
@@ -119,7 +120,7 @@ export function isToolAllowedByName(toolName, policy, annotations = null) {
   if (policy.denyTools.has(toolName)) return false;
   if (policy.allowTools.size > 0 && !policy.allowTools.has(toolName)) return false;
   if (policy.readonly) {
-    if (READONLY_TOOLS.has(toolName)) return true;
+    if (READONLY_TOOLS.has(toolName) || policy.learnedReadOnlyTools?.has(toolName)) return true;
     if (annotations && annotations.readOnlyHint === true && annotations.destructiveHint !== true) return true;
     return false;
   }
@@ -212,9 +213,12 @@ export function filterToolsListBody(bodyText, contentType, policy) {
   }
   return transformRpcPayload(bodyText, contentType, (obj) => {
     if (!Array.isArray(obj?.result?.tools)) return null;
-    const filtered = obj.result.tools.filter((tool) =>
-      isToolAllowedByName(tool?.name, policy, tool?.annotations || null)
-    );
+    const filtered = obj.result.tools.filter((tool) => {
+      if (tool?.name && tool?.annotations?.readOnlyHint === true && tool?.annotations?.destructiveHint !== true) {
+        policy.learnedReadOnlyTools?.add(tool.name);
+      }
+      return isToolAllowedByName(tool?.name, policy, tool?.annotations || null);
+    });
     return {
       ...obj,
       result: {

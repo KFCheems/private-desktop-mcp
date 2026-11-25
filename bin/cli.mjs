@@ -607,7 +607,8 @@ async function connect(creds, { onHealthy } = {}) {
       }, 10000);
       healthyTimer.unref?.();
 
-      // Zero-cost hibernation heartbeat: DO responds "pong" without waking isolate
+      // RFC 6455 control-frame heartbeat: answered at the Cloudflare edge without waking hibernated DOs,
+      // and compatible with both legacy v0.3.x and v0.4.0 Workers.
       heartbeatTimer = setInterval(() => {
         if (ws.readyState !== WebSocket.OPEN) return;
         if (awaitingPong) {
@@ -620,7 +621,7 @@ async function connect(creds, { onHealthy } = {}) {
         }
         awaitingPong = true;
         try {
-          ws.send("ping");
+          ws.ping();
         } catch {
           try {
             ws.terminate();
@@ -634,6 +635,10 @@ async function connect(creds, { onHealthy } = {}) {
       console.log("CONNECTED. Your AI client can now use this device. Ctrl+C to disconnect.");
     });
 
+    ws.on("pong", () => {
+      awaitingPong = false;
+    });
+
     ws.on("unexpected-response", (_req, res) => {
       status = res.statusCode;
       res.resume();
@@ -642,9 +647,9 @@ async function connect(creds, { onHealthy } = {}) {
     });
 
     ws.on("message", (data) => {
+      awaitingPong = false;
       const text = String(data);
       if (text === "pong") {
-        awaitingPong = false;
         return;
       }
       let m;
