@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { hasEnvironmentProxy, normalizeProxy, queryWindowsProxy, resolveProxyForUrl } from "../bin/proxy.mjs";
+import { hasEnvironmentProxy, normalizeProxy, queryWindowsProxy, parseMacOsScutilProxy, queryMacOsProxy, resolveProxyForUrl } from "../bin/proxy.mjs";
 const relay="https://private-desktop-device-relay.ljx2043979076.workers.dev";
 
 test("Windows system HTTP/Mixed proxy gets selected when env proxy is not set",()=>{
@@ -57,4 +57,31 @@ test("proxy URI descriptions do not expose credentials",()=>{
  const r=normalizeProxy("http://a:secret@127.0.0.1:7890","windows");
  assert.equal(r.mode,"proxy");
  assert.ok(!r.description.includes("secret"));
+});
+test("macOS scutil proxy detection parses HTTPS proxy and respects ExceptionsList bypass",()=>{
+ const scutilOut=`<dictionary> {
+  ExceptionsList : <array> {
+    0 : *.local
+    1 : *.workers.dev
+  }
+  HTTPEnable : 1
+  HTTPPort : 7890
+  HTTPProxy : 127.0.0.1
+  HTTPSEnable : 1
+  HTTPSPort : 7891
+  HTTPSProxy : 127.0.0.1
+}`;
+ const proxied=parseMacOsScutilProxy(scutilOut,"https://api.example.com/mcp");
+ assert.equal(proxied.mode,"proxy");
+ assert.equal(proxied.source,"macos");
+ assert.equal(new URL(proxied.url).port,"7891");
+ const bypassed=parseMacOsScutilProxy(scutilOut,relay);
+ assert.equal(bypassed.mode,"direct");
+ const resolved=resolveProxyForUrl("https://api.example.com/mcp",{
+  platform:"darwin",
+  env:{},
+  macosLookup:(u)=>queryMacOsProxy(u,{spawn:()=>({status:0,stdout:scutilOut})})
+ });
+ assert.equal(resolved.mode,"proxy");
+ assert.equal(resolved.source,"macos");
 });
