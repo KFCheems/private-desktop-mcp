@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import worker, { DeviceHub, RELAY_META_TOOLS } from "../worker/index.mjs";
+import worker, { DeviceHub, RELAY_META_TOOLS, SUPPORTED_PROTOCOL_VERSIONS } from "../worker/index.mjs";
 
 class MockStorage {
   constructor() {
@@ -395,6 +395,78 @@ test("DeviceHub supports pairing, meta-tools, per-call _device targeting, edge r
     assert.equal((await hub.list()).length, 0);
     assert.equal(devA.serverWs.closed?.code, 1008);
     assert.equal(devB.serverWs.closed?.code, 1008);
+  } finally {
+    restore();
+  }
+});
+
+test("DeviceHub answers initialize locally with no devices online", async () => {
+  const { hub, restore } = createHubEnv();
+  const base = "https://private-desktop-device-relay.ljx2043979076.workers.dev";
+  try {
+    const res = await hub.fetch(
+      new Request(`${base}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-pcc-actor": "alice@example.com" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t", version: "1" } }
+        })
+      })
+    );
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.result.protocolVersion, "2024-11-05");
+    assert.ok(SUPPORTED_PROTOCOL_VERSIONS.includes(body.result.protocolVersion));
+  } finally {
+    restore();
+  }
+});
+
+test("DeviceHub accepts notifications/initialized locally with no devices online", async () => {
+  const { hub, storage, restore } = createHubEnv();
+  const base = "https://private-desktop-device-relay.ljx2043979076.workers.dev";
+  try {
+    const res = await hub.fetch(
+      new Request(`${base}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-pcc-actor": "alice@example.com" },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })
+      })
+    );
+    assert.equal(res.status, 202);
+    assert.equal(await res.text(), "");
+    const audit = storage.auditRows.at(-1);
+    assert.equal(audit.mcp_method, "notifications/initialized");
+    assert.equal(audit.status, 202);
+    assert.equal(Boolean(audit.ok), true);
+  } finally {
+    restore();
+  }
+});
+
+test("DeviceHub negotiates only supported MCP protocol versions", async () => {
+  const { hub, restore } = createHubEnv();
+  const base = "https://private-desktop-device-relay.ljx2043979076.workers.dev";
+  try {
+    const res = await hub.fetch(
+      new Request(`${base}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-pcc-actor": "alice@example.com" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "initialize",
+          params: { protocolVersion: "2099-01-01", capabilities: {}, clientInfo: { name: "t", version: "1" } }
+        })
+      })
+    );
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.result.protocolVersion, SUPPORTED_PROTOCOL_VERSIONS[0]);
+    assert.ok(SUPPORTED_PROTOCOL_VERSIONS.includes(body.result.protocolVersion));
   } finally {
     restore();
   }
