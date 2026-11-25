@@ -21,9 +21,12 @@ test("server description advertises canonical endpoint",()=>{
  assert.equal(json.remotes[0].url,"https://private-desktop-device-relay.ljx2043979076.workers.dev/mcp");
 });
 
-test("gateway and CLI imports are declared as direct dependencies",()=>{
+test("gateway and CLI imports are declared as direct dependencies and files are packed",()=>{
  const pkg=JSON.parse(fs.readFileSync("package.json","utf8"));
- for(const file of ["gateway.mjs","bin/cli.mjs"]){
+ const serverJson=JSON.parse(fs.readFileSync("server.json","utf8"));
+ assert.equal(serverJson.version,pkg.version);
+ assert.ok(pkg.files.includes("bin/policy.mjs"));
+ for(const file of ["gateway.mjs","bin/cli.mjs","bin/policy.mjs","bin/proxy.mjs"]){
   const source=fs.readFileSync(file,"utf8");
   for(const match of source.matchAll(/\bfrom\s+["']([^"']+)["']/g)){
    const spec=match[1];
@@ -32,4 +35,13 @@ test("gateway and CLI imports are declared as direct dependencies",()=>{
    assert.ok(Object.hasOwn(pkg.dependencies,name),`${file} imports ${spec}, but ${name} is not a direct dependency`);
   }
  }
+});
+
+test("CLI report outputs valid sanitized JSON diagnostics",()=>{
+ const res=spawnSync(process.execPath,["bin/cli.mjs","report","--readonly"],{encoding:"utf8"});
+ assert.equal(res.status,0,res.stderr);
+ const report=JSON.parse(res.stdout);
+ assert.equal(report.policy.readonly,true);
+ assert.equal(report.policy.dlp,true);
+ assert.ok(typeof report.version==="string"&&report.version.length>0);
 });

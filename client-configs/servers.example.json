@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "winremote": {
+      "command": "winremote-mcp",
+      "args": ["--transport", "stdio"]
+    }
+  }
+}

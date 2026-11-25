@@ -10,3 +10,16 @@ class_name = "DeviceHub"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["DeviceHub"]
+
+# Required for cryptographic Cloudflare Access JWT verification (recommended via `wrangler secret put` or [vars]):
+#   CF_ACCESS_TEAM_DOMAIN = "https://<your-team>.cloudflareaccess.com"
+#   CF_ACCESS_AUD         = "<your-access-application-aud-tag>"
+#
+# Optional self-hosting overrides (defaults preserve the canonical workers.dev / legacy routes):
+#   SHARED_HOSTS          = "your-worker.your-subdomain.workers.dev"
+#   ALLOWED_OWNER_HOSTS   = "mcp.example.com"
+#   ALLOWED_RELAY_HOSTS   = "relay.example.com"
+#   PUBLIC_BASE_URL       = "https://your-worker.your-subdomain.workers.dev"
+#
+# Temporary migration escape hatch ONLY (never leave enabled in production):
+#   ALLOW_UNVERIFIED_ACCESS_HEADER = "true"

@@ -1,6 +1,6 @@
 {
   "name": "@juexibobi/private-desktop-mcp",
-  "version": "0.3.6",
+  "version": "0.4.0",
   "description": "Private multi-device Desktop Commander MCP connector for Cloudflare Workers with paired WebSocket relays",
   "license": "MIT",
   "type": "module",
@@ -15,6 +15,7 @@
     "bin/activity.mjs",
     "bin/proxy.mjs",
     "bin/logging.mjs",
+    "bin/policy.mjs",
     "gateway.mjs",
     "README.md",
     "LICENSE"
@@ -25,16 +26,16 @@
   },
   "homepage": "https://github.com/KFCheems/private-desktop-mcp",
   "scripts": {
-    "test": "node --check bin/cli.mjs && node --check gateway.mjs && node --test tests/*.test.mjs"
+    "test": "node --check bin/cli.mjs && node --check bin/policy.mjs && node --check bin/proxy.mjs && node --check gateway.mjs && node --check worker/index.mjs && node --check worker/auth.mjs && node --test tests/*.test.mjs"
   },
   "dependencies": {
-    "@wonderwhy-er/desktop-commander": "0.2.52",
-    "mcp-proxy": "6.7.19",
-    "ws": "8.18.3",
-    "undici": "7.30.0",
-    "https-proxy-agent": "9.1.0",
-    "proxy-from-env": "2.1.0",
     "@modelcontextprotocol/client": "2.3.1",
-    "@modelcontextprotocol/server": "2.3.1"
+    "@modelcontextprotocol/server": "2.3.1",
+    "@wonderwhy-er/desktop-commander": "0.3.4",
+    "https-proxy-agent": "9.1.0",
+    "mcp-proxy": "6.7.19",
+    "proxy-from-env": "2.1.0",
+    "undici": "7.30.0",
+    "ws": "8.18.3"
   }
 }
