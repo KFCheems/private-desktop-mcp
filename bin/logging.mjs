@@ -48,8 +48,12 @@ export function rpcOutcome(body,contentType=""){
   return {failed:false,size:Buffer.byteLength(String(body||""),"utf8"),kind:"non-json",resultFields:[]};
  }
 }
+let stdoutMode="text";
+export function setStdoutMode(mode){
+ stdoutMode=mode==="json"?"json":"text";
+}
 export function logLine(level,message){
  const tag={info:"INFO",warn:"WARN",error:"ERROR",debug:"DEBUG"}[level]||"INFO";
  const output="["+timestamp()+"] ["+tag+"] "+sanitizeText(message,1550);
- if(level==="error")console.error(output);else console.log(output);
+ if(level==="error"||stdoutMode==="json")console.error(output);else console.log(output);
 }

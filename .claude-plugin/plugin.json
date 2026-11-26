@@ -8,8 +8,8 @@
   },
   "repository": "https://github.com/KFCheems/private-desktop-mcp",
   "license": "MIT",
-  "mcpServers": "../.mcp.json",
+  "mcpServers": "./.mcp.json",
   "skills": [
-    "../skills/private-desktop-mcp"
+    "./skills/private-desktop-mcp"
   ]
 }

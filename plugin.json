@@ -17,7 +17,7 @@
     "multi-device",
     "agent-native"
   ],
-  "mcpServers": ".mcp.json",
+  "mcpServers": "./.mcp.json",
   "skills": [
     "./skills/private-desktop-mcp"
   ]

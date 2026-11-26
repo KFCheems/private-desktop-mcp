@@ -103,3 +103,47 @@ test("CLI setup-client --dry-run --json and status --json emit machine-readable 
   assert.equal(statusPayload.ok, true);
   assert.equal(typeof statusPayload.paired, "boolean");
 });
+
+test("configureMcpClient refuses to overwrite a config it cannot read", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pcc-client-unreadable-"));
+  const original = JSON.stringify({ mcpServers: { github: { url: "https://api.githubcopilot.com/mcp/" } } }, null, 2) + "\n";
+  const file = path.join(tmpDir, "cursor-mcp.json");
+  fs.writeFileSync(file, original);
+  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+  const unreadable = isRoot ? path.join(tmpDir, "config-is-a-directory") : file;
+  if (isRoot) fs.mkdirSync(unreadable);
+  else fs.chmodSync(file, 0o000);
+
+  const expectedCode = isRoot ? /EISDIR/ : /EACCES/;
+  const assertUnreadable = (fn) => {
+    assert.throws(fn, (err) => {
+      assert.match(err.message, expectedCode);
+      assert.ok(err.message.includes(unreadable), `error must name the path: ${err.message}`);
+      return true;
+    });
+  };
+
+  try {
+    // Apply path must fail loudly instead of silently replacing the unreadable config.
+    assertUnreadable(() => configureMcpClient({ client: "cursor", relayUrl: relay, configPath: unreadable }));
+    // Dry-run must fail the same way instead of fabricating a "create" preview.
+    assertUnreadable(() =>
+      configureMcpClient({ client: "cursor", relayUrl: relay, configPath: unreadable, dryRun: true })
+    );
+
+    if (!isRoot) fs.chmodSync(file, 0o600);
+    assert.equal(fs.readFileSync(file, "utf8"), original, "original config bytes must be untouched");
+
+    // A genuinely absent path is still a legitimate create.
+    const absent = path.join(tmpDir, "nested", "mcp.json");
+    const created = configureMcpClient({ client: "cursor", relayUrl: relay, configPath: absent, dryRun: true });
+    assert.equal(created.action, "create");
+    assert.equal(created.changed, true);
+    assert.equal(fs.existsSync(absent), false);
+  } finally {
+    try {
+      fs.chmodSync(file, 0o600);
+    } catch {}
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
