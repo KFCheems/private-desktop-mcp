@@ -1,6 +1,7 @@
 import { authenticateOwnerRequest } from "./auth.mjs";
 
 export const WORKER_VERSION = "0.5.0";
+export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
 const DEFAULT_SHARED_HOSTS = ["private-desktop-device-relay.ljx2043979076.workers.dev"];
 const DEFAULT_OWNER_HOSTS = ["mcp.qqking.top"];
@@ -1182,12 +1183,13 @@ export class DeviceHub {
   async buildEdgeInitializeResponse(rpc) {
     const devices = await this.list();
     const requestedVersion = rpc?.params?.protocolVersion;
-    const protocolVersion =
-      typeof requestedVersion === "string" && requestedVersion.trim() ? requestedVersion.trim() : "2025-03-26";
+    const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS.includes(requestedVersion)
+      ? requestedVersion
+      : SUPPORTED_PROTOCOL_VERSIONS[0];
     const result = {
       protocolVersion,
       capabilities: {
-        tools: {},
+        tools: { listChanged: false },
         resources: {},
         prompts: {}
       },
@@ -1318,6 +1320,7 @@ export class DeviceHub {
         return this.buildEdgeInitializeResponse(rpc);
       }
       if (mcpMethod === "notifications/initialized") {
+        this.recordAudit({ actor, mcpMethod, mcpName: "", status: 202, durationMs: Date.now() - started, ok: true });
         return new Response(null, { status: 202, headers: { "cache-control": "no-store" } });
       }
       if (mcpMethod === "ping") {

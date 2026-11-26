@@ -26,7 +26,10 @@ const PATH_ARG_KEYS = [
   "destination",
   "cwd",
   "workingDirectory",
+  "working_directory",
   "filePath",
+  "file_path",
+  "file_paths",
   "directory",
   "dir"
 ];
@@ -111,6 +114,7 @@ export function createPolicy({
     allowDirs: allowDirs.map((d) => path.resolve(String(d).trim())).filter(Boolean),
     protectedDirs: protectedDirs.map((d) => path.resolve(String(d).trim())).filter(Boolean),
     learnedReadOnlyTools: new Set(),
+    toolAnnotations: new Map(),
     dlp: Boolean(dlp)
   };
 }
@@ -132,7 +136,10 @@ export function evaluateToolCall(rpc, policy, { platform = process.platform } = 
   const toolName = typeof rpc.params?.name === "string" ? rpc.params.name : "";
   const args = rpc.params?.arguments && typeof rpc.params.arguments === "object" ? rpc.params.arguments : {};
 
-  if (!isToolAllowedByName(toolName, policy)) {
+  // Only trust annotations learned from the upstream tools/list response. A caller can
+  // freely put whatever it likes in params._meta, so those hints are not authoritative.
+  const annotations = policy.toolAnnotations?.get(toolName) || null;
+  if (!isToolAllowedByName(toolName, policy, annotations)) {
     const modeReason = policy.readonly ? "connector is running in --readonly mode" : "tool is disallowed by local policy";
     return { allowed: false, reason: `Blocked locally: "${toolName}" is not permitted (${modeReason}).` };
   }
@@ -214,8 +221,14 @@ export function filterToolsListBody(bodyText, contentType, policy) {
   return transformRpcPayload(bodyText, contentType, (obj) => {
     if (!Array.isArray(obj?.result?.tools)) return null;
     const filtered = obj.result.tools.filter((tool) => {
-      if (tool?.name && tool?.annotations?.readOnlyHint === true && tool?.annotations?.destructiveHint !== true) {
-        policy.learnedReadOnlyTools?.add(tool.name);
+      if (tool?.name && tool?.annotations && typeof tool.annotations === "object") {
+        // Remember discovered annotations so a later tools/call can be authorized against
+        // the same readOnlyHint/destructiveHint that tools/list advertised, even if the
+        // client does not echo annotations back on the call itself.
+        policy.toolAnnotations?.set(tool.name, tool.annotations);
+        if (tool.annotations.readOnlyHint === true && tool.annotations.destructiveHint !== true) {
+          policy.learnedReadOnlyTools?.add(tool.name);
+        }
       }
       return isToolAllowedByName(tool?.name, policy, tool?.annotations || null);
     });
@@ -252,24 +265,61 @@ export function redactSecretsInText(text, extraSecrets = []) {
   return { text: out, redactedCount: count };
 }
 
+// Recursively redact string values inside arbitrary JSON (handles structuredContent,
+// nested objects/arrays and JSON-encoded strings). Returns a clone + count of hits.
+function redactValueDeep(value, extraSecrets) {
+  let redactedCount = 0;
+  const walk = (v) => {
+    if (typeof v === "string") {
+      const res = redactSecretsInText(v, extraSecrets);
+      redactedCount += res.redactedCount;
+      return res.text;
+    }
+    if (Array.isArray(v)) return v.map(walk);
+    if (v && typeof v === "object") {
+      const out = {};
+      for (const [k, val] of Object.entries(v)) out[k] = walk(val);
+      return out;
+    }
+    return v;
+  };
+  return { value: walk(value), redactedCount };
+}
+
 export function redactOutboundResponse(bodyText, contentType = "", { enabled = true, extraSecrets = [] } = {}) {
   if (!enabled || !bodyText) return { body: bodyText, redactedCount: 0 };
   let total = 0;
   const body = transformRpcPayload(bodyText, contentType, (obj) => {
-    if (!Array.isArray(obj?.result?.content)) return null;
+    const hasContent = Array.isArray(obj?.result?.content);
+    const hasStructured = obj?.result?.structuredContent !== undefined && obj.result.structuredContent !== null;
+    if (!hasContent && !hasStructured) return null;
     let modified = false;
-    const content = obj.result.content.map((block) => {
-      if (block?.type === "text" && typeof block.text === "string") {
-        const res = redactSecretsInText(block.text, extraSecrets);
-        if (res.redactedCount > 0) {
-          total += res.redactedCount;
-          modified = true;
-          return { ...block, text: res.text };
+    let content = obj.result.content;
+    if (hasContent) {
+      content = obj.result.content.map((block) => {
+        if (block?.type === "text" && typeof block.text === "string") {
+          const res = redactSecretsInText(block.text, extraSecrets);
+          if (res.redactedCount > 0) {
+            total += res.redactedCount;
+            modified = true;
+            return { ...block, text: res.text };
+          }
         }
+        return block;
+      });
+    }
+    let result = hasContent ? { ...obj.result, content } : obj.result;
+    // Redact secrets embedded in machine-readable structured output too; otherwise a
+    // secret returned via result.structuredContent would still reach the relay/LLM.
+    if (hasStructured) {
+      const deep = redactValueDeep(obj.result.structuredContent, extraSecrets);
+      if (deep.redactedCount > 0) {
+        total += deep.redactedCount;
+        modified = true;
+        result = { ...result, structuredContent: deep.value };
       }
-      return block;
-    });
-    return modified ? { ...obj, result: { ...obj.result, content } } : null;
+    }
+    return modified ? { ...obj, result } : null;
   });
   return { body, redactedCount: total };
 }

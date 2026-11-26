@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import worker, { DeviceHub, RELAY_META_TOOLS } from "../worker/index.mjs";
+import worker, { DeviceHub, RELAY_META_TOOLS, SUPPORTED_PROTOCOL_VERSIONS } from "../worker/index.mjs";
 
 class MockStorage {
   constructor() {
@@ -438,6 +438,60 @@ test("Worker router enforces Access auth and Origin CSRF checks on /admin POST",
   );
   assert.equal(csrf.status, 403);
   assert.equal(hubCalled, false);
+});
+
+test("DeviceHub answers initialize locally with no devices online and negotiates only supported MCP protocol versions", async () => {
+  const { hub, storage, restore } = createHubEnv();
+  const base = "https://private-desktop-device-relay.ljx2043979076.workers.dev";
+  try {
+    const res1 = await hub.fetch(
+      new Request(`${base}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-pcc-actor": "alice@example.com" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t", version: "1" } }
+        })
+      })
+    );
+    assert.equal(res1.status, 200);
+    const body1 = await res1.json();
+    assert.equal(body1.result.protocolVersion, "2024-11-05");
+    assert.ok(SUPPORTED_PROTOCOL_VERSIONS.includes(body1.result.protocolVersion));
+
+    const res2 = await hub.fetch(
+      new Request(`${base}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-pcc-actor": "alice@example.com" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "initialize",
+          params: { protocolVersion: "2099-01-01", capabilities: {}, clientInfo: { name: "t", version: "1" } }
+        })
+      })
+    );
+    const body2 = await res2.json();
+    assert.equal(body2.result.protocolVersion, SUPPORTED_PROTOCOL_VERSIONS[0]);
+
+    const notifRes = await hub.fetch(
+      new Request(`${base}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-pcc-actor": "alice@example.com" },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })
+      })
+    );
+    assert.equal(notifRes.status, 202);
+    assert.equal(await notifRes.text(), "");
+    const audit = storage.auditRows.at(-1);
+    assert.equal(audit.mcp_method, "notifications/initialized");
+    assert.equal(audit.status, 202);
+    assert.equal(Boolean(audit.ok), true);
+  } finally {
+    restore();
+  }
 });
 
 test("DeviceHub provides agent-native edge initialize, resources, prompts, _device schema injection, relay_set_device_policy, and self-healing tool errors", async () => {

@@ -136,3 +136,102 @@ test("redactOutboundResponse strips high-confidence secrets and runtime tokens w
   assert.doesNotMatch(text, new RegExp(deviceToken));
   assert.match(text, /\[REDACTED_BY_PCC_DLP\]/);
 });
+
+test("redactOutboundResponse redacts secrets inside result.structuredContent", () => {
+  const fakeAwsKey = "AKIA" + "IOSFODNN7EXAMPLE";
+  const deviceToken = "b".repeat(64);
+  const body = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 3,
+    result: {
+      content: [{ type: "text", text: "ok" }],
+      structuredContent: {
+        nested: { token: fakeAwsKey, items: ["clean", `key=${deviceToken}`] },
+        count: 2
+      }
+    }
+  });
+
+  const { body: redacted, redactedCount } = redactOutboundResponse(body, "application/json", {
+    enabled: true,
+    extraSecrets: [deviceToken]
+  });
+  assert.equal(redactedCount, 2);
+  const parsed = JSON.parse(redacted);
+  // structuredContent must no longer carry the secrets
+  assert.equal(JSON.stringify(parsed).includes(fakeAwsKey), false);
+  assert.equal(JSON.stringify(parsed).includes(deviceToken), false);
+  // non-secret structured values are preserved
+  assert.equal(parsed.result.structuredContent.count, 2);
+  assert.equal(parsed.result.structuredContent.nested.items[0], "clean");
+  assert.match(JSON.stringify(parsed), /\[REDACTED_BY_PCC_DLP\]/);
+});
+
+test("allow-dir jail recognizes snake_case file_path used by Desktop Commander edit_block", () => {
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "pcc-filepath-"));
+  const allowedDir = path.join(tmpBase, "allowed");
+  const outsideDir = path.join(tmpBase, "outside");
+  fs.mkdirSync(allowedDir);
+  fs.mkdirSync(outsideDir);
+  const insideFile = path.join(allowedDir, "ok.txt");
+  const outsideFile = path.join(outsideDir, "secret.txt");
+  fs.writeFileSync(insideFile, "ok");
+  fs.writeFileSync(outsideFile, "secret");
+
+  try {
+    const policy = createPolicy({ allowDirs: [allowedDir] });
+    assert.equal(evaluateToolCall(call("edit_block", { file_path: insideFile }), policy).allowed, true);
+    assert.equal(evaluateToolCall(call("edit_block", { file_path: outsideFile }), policy).allowed, false);
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+});
+
+test("readonly mode ignores client-supplied readOnlyHint annotations", () => {
+  const policy = createPolicy({ readonly: true });
+  const annotatedCall = {
+    jsonrpc: "2.0",
+    id: 9,
+    method: "tools/call",
+    params: {
+      name: "winremote__snapshot",
+      arguments: {},
+      _meta: { annotations: { readOnlyHint: true, destructiveHint: false } }
+    }
+  };
+  assert.equal(evaluateToolCall(annotatedCall, policy).allowed, false);
+  // Even a statically known write tool cannot be unlocked by a caller-supplied hint.
+  const hintedWrite = {
+    jsonrpc: "2.0",
+    id: 10,
+    method: "tools/call",
+    params: {
+      name: "write_file",
+      arguments: { path: "/tmp/a.txt", content: "hi" },
+      _meta: { annotations: { readOnlyHint: true, destructiveHint: false } }
+    }
+  };
+  assert.equal(evaluateToolCall(hintedWrite, policy).allowed, false);
+  // A tool with no annotation and not in the static set stays blocked
+  assert.equal(evaluateToolCall(call("winremote__shell"), policy).allowed, false);
+  // A destructive annotation is not honored as read-only
+  const destructive = {
+    jsonrpc: "2.0",
+    id: 11,
+    method: "tools/call",
+    params: { name: "winremote__wipe", arguments: {}, _meta: { annotations: { readOnlyHint: true, destructiveHint: true } } }
+  };
+  assert.equal(evaluateToolCall(destructive, policy).allowed, false);
+});
+
+test("readonly mode authorizes a call against annotations learned from tools/list", () => {
+  const policy = createPolicy({ readonly: true });
+  const listBody = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    result: { tools: [{ name: "winremote__snapshot", annotations: { readOnlyHint: true, destructiveHint: false } }] }
+  });
+  filterToolsListBody(listBody, "application/json", policy);
+  // Call carries NO _meta annotations; must still be allowed from learned annotations
+  assert.equal(evaluateToolCall(call("winremote__snapshot"), policy).allowed, true);
+});
