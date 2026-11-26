@@ -1,0 +1,21 @@
+{
+  "name": "private-desktop-mcp",
+  "owner": {
+    "name": "KFCheems",
+    "url": "https://github.com/KFCheems"
+  },
+  "metadata": {
+    "description": "Private Desktop MCP — self-hosted Cloudflare Access multi-device remote Desktop Commander bridge and agent skill"
+  },
+  "plugins": [
+    {
+      "name": "private-desktop-mcp",
+      "source": ".",
+      "description": "Self-hosted multi-device remote Desktop Commander MCP bridge with in-chat device routing, read-only locks, and outbound DLP",
+      "license": "MIT",
+      "keywords": ["mcp", "remote-desktop", "desktop-commander", "cloudflare-workers", "multi-device"],
+      "category": "developer-tools",
+      "repository": "https://github.com/KFCheems/private-desktop-mcp"
+    }
+  ]
+}

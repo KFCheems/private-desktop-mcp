@@ -1,0 +1,20 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "private-desktop-mcp",
+  "displayName": "Private Desktop MCP",
+  "description": "Use files, terminal, and processes across your paired computers from Antigravity via your self-hosted Cloudflare Access & Durable Object relay.",
+  "version": "0.5.0",
+  "suggestedPrompts": [
+    "List my paired desktop devices and check their latency",
+    "Inspect the active processes and workspace directory on my connected machine",
+    "Show recent sanitized tool activity across my paired devices"
+  ],
+  "author": {
+    "name": "KFCheems",
+    "url": "https://github.com/KFCheems"
+  },
+  "homepage": "https://github.com/KFCheems/private-desktop-mcp",
+  "repository": "https://github.com/KFCheems/private-desktop-mcp",
+  "license": "MIT",
+  "keywords": ["mcp", "remote-desktop", "desktop-commander", "cloudflare-workers", "multi-device", "agent-native"]
+}

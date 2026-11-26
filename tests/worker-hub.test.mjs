@@ -547,3 +547,182 @@ test("Worker router enforces Access auth and Origin CSRF checks on /admin POST",
   assert.equal(csrf.status, 403);
   assert.equal(hubCalled, false);
 });
+
+test("DeviceHub answers initialize locally with no devices online and negotiates only supported MCP protocol versions", async () => {
+  const { hub, storage, restore } = createHubEnv();
+  const base = "https://private-desktop-device-relay.ljx2043979076.workers.dev";
+  try {
+    const res1 = await hub.fetch(
+      new Request(`${base}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-pcc-actor": "alice@example.com" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t", version: "1" } }
+        })
+      })
+    );
+    assert.equal(res1.status, 200);
+    const body1 = await res1.json();
+    assert.equal(body1.result.protocolVersion, "2024-11-05");
+    assert.ok(SUPPORTED_PROTOCOL_VERSIONS.includes(body1.result.protocolVersion));
+
+    const res2 = await hub.fetch(
+      new Request(`${base}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-pcc-actor": "alice@example.com" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "initialize",
+          params: { protocolVersion: "2099-01-01", capabilities: {}, clientInfo: { name: "t", version: "1" } }
+        })
+      })
+    );
+    const body2 = await res2.json();
+    assert.equal(body2.result.protocolVersion, SUPPORTED_PROTOCOL_VERSIONS[0]);
+
+    const notifRes = await hub.fetch(
+      new Request(`${base}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-pcc-actor": "alice@example.com" },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })
+      })
+    );
+    assert.equal(notifRes.status, 202);
+    assert.equal(await notifRes.text(), "");
+    const audit = storage.auditRows.at(-1);
+    assert.equal(audit.mcp_method, "notifications/initialized");
+    assert.equal(audit.status, 202);
+    assert.equal(Boolean(audit.ok), true);
+  } finally {
+    restore();
+  }
+});
+
+test("DeviceHub provides agent-native edge initialize, resources, prompts, _device schema injection, relay_set_device_policy, and self-healing tool errors", async () => {
+  const { hub, restore } = createHubEnv();
+  const base = "https://private-desktop-device-relay.ljx2043979076.workers.dev";
+  try {
+    // 1. Edge initialize succeeds even when 0 devices are online
+    const initEmptyRes = await hub.fetch(
+      new Request(`${base}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-pcc-actor": "agent@example.com" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 100, method: "initialize", params: { protocolVersion: "2025-03-26" } })
+      })
+    );
+    assert.equal(initEmptyRes.status, 200);
+    const initEmpty = await initEmptyRes.json();
+    assert.equal(initEmpty.result.protocolVersion, "2025-03-26");
+    assert.match(initEmpty.result.instructions, /Private Desktop MCP Relay/);
+
+    // 2. Self-healing structured tool error when 0 devices are online
+    const offlineCallRes = await hub.fetch(
+      new Request(`${base}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-pcc-actor": "agent@example.com" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 101, method: "tools/call", params: { name: "read_file", arguments: { path: "a.txt" } } })
+      })
+    );
+    assert.equal(offlineCallRes.status, 200);
+    const offlineCall = await offlineCallRes.json();
+    assert.equal(offlineCall.result.isError, true);
+    assert.equal(offlineCall.result.structuredContent.errorCode, "NO_DEVICE_ONLINE");
+    assert.ok(Array.isArray(offlineCall.result.structuredContent.nextActions));
+
+    // 3. Edge resources/list, resources/read (relay://devices, relay://status, relay://audit), prompts/list, prompts/get
+    const resList = await (
+      await hub.fetch(
+        new Request(`${base}/mcp`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 102, method: "resources/list" })
+        })
+      )
+    ).json();
+    assert.ok(resList.result.resources.some((r) => r.uri === "relay://devices"));
+
+    const resRead = await (
+      await hub.fetch(
+        new Request(`${base}/mcp`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-pcc-actor": "agent@example.com", "x-pcc-verified": "1" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 103, method: "resources/read", params: { uri: "relay://status" } })
+        })
+      )
+    ).json();
+    const statusResource = JSON.parse(resRead.result.contents[0].text);
+    assert.equal(statusResource.accessJwtVerified, true);
+
+    const promptGet = await (
+      await hub.fetch(
+        new Request(`${base}/mcp`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 104, method: "prompts/get", params: { name: "multi-device-triage", arguments: { task: "Check disk space" } } })
+        })
+      )
+    ).json();
+    assert.match(promptGet.result.messages[0].content.text, /Check disk space/);
+
+    // 4. Pair a device, verify _device schema injection on tools/list, and test relay_set_device_policy
+    const dev = await pairAndConnect(hub, "LabPC", (raw, ws) => {
+      const msg = JSON.parse(raw);
+      if (msg.kind === "request") {
+        const rpc = JSON.parse(msg.body || "{}");
+        const reply =
+          rpc.method === "tools/list"
+            ? {
+                jsonrpc: "2.0",
+                id: rpc.id,
+                result: {
+                  tools: [
+                    {
+                      name: "read_file",
+                      description: "Read file",
+                      inputSchema: { type: "object", properties: { path: { type: "string" } } }
+                    }
+                  ]
+                }
+              }
+            : { jsonrpc: "2.0", id: rpc.id, result: { content: [{ type: "text", text: "ok" }] } };
+        hub.webSocketMessage(ws, JSON.stringify({ kind: "response", id: msg.id, status: 200, headers: { "content-type": "application/json" }, body: JSON.stringify(reply) }));
+      }
+    });
+
+    const toolsJson = await (
+      await hub.fetch(
+        new Request(`${base}/mcp`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 105, method: "tools/list" })
+        })
+      )
+    ).json();
+    const readFileTool = toolsJson.result.tools.find((t) => t.name === "read_file");
+    assert.equal(readFileTool.inputSchema.properties._device.type, "string");
+
+    // Lock and rename LabPC via relay_set_device_policy meta-tool
+    const policyRes = await (
+      await hub.fetch(
+        new Request(`${base}/mcp`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 106,
+            method: "tools/call",
+            params: { name: "relay_set_device_policy", arguments: { device_id: dev.creds.deviceId, read_only: true, new_name: "LabPC-RO" } }
+          })
+        })
+      )
+    ).json();
+    assert.equal(policyRes.result.structuredContent.readOnly, true);
+    assert.equal(policyRes.result.structuredContent.name, "LabPC-RO");
+  } finally {
+    restore();
+  }
+});

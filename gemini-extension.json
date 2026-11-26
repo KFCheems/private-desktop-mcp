@@ -1,0 +1,13 @@
+{
+  "name": "private-desktop-mcp",
+  "version": "0.5.0",
+  "description": "Private Desktop MCP: self-hosted Cloudflare Access multi-device remote Desktop Commander bridge with in-chat device routing and DLP guardrails.",
+  "mcpServers": {
+    "private-desktop": {
+      "httpUrl": "https://private-desktop-device-relay.ljx2043979076.workers.dev/mcp",
+      "oauth": {
+        "enabled": true
+      }
+    }
+  }
+}

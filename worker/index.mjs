@@ -1,6 +1,7 @@
 import { authenticateOwnerRequest } from "./auth.mjs";
 
-export const WORKER_VERSION = "0.4.0";
+export const WORKER_VERSION = "0.5.0";
+export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
 const DEFAULT_SHARED_HOSTS = ["private-desktop-device-relay.ljx2043979076.workers.dev"];
 const DEFAULT_OWNER_HOSTS = ["mcp.qqking.top"];
@@ -80,6 +81,22 @@ export const RELAY_META_TOOLS = [
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
   },
   {
+    name: "relay_set_device_policy",
+    description:
+      "Configure edge governance on a paired device: toggle its read-only lock (blocking write/shell tools at the Cloudflare edge) or rename the device.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        device_id: { type: "string", description: "Target paired device UUID" },
+        device_name: { type: "string", description: "Target paired device name" },
+        read_only: { type: "boolean", description: "Set true to lock device to read-only tools at the edge, false to unlock" },
+        new_name: { type: "string", description: "Optional new display name for the device (max 40 chars)" }
+      },
+      additionalProperties: false
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+  },
+  {
     name: "relay_recent_activity",
     description:
       "View recent sanitized relay audit metadata (timestamps, actor, device, tool name, status, duration). Never exposes file contents or command output.",
@@ -94,7 +111,52 @@ export const RELAY_META_TOOLS = [
   }
 ];
 
+export const RELAY_RESOURCES = [
+  {
+    uri: "relay://devices",
+    name: "Paired Desktop Devices",
+    description: "Live inventory of paired desktop devices, online state, OS/arch, read-only locks, and current selection.",
+    mimeType: "application/json"
+  },
+  {
+    uri: "relay://status",
+    name: "Relay & Security Posture",
+    description: "Cloudflare Worker relay version, supported protocol features, Access verification mode, and online device count.",
+    mimeType: "application/json"
+  },
+  {
+    uri: "relay://audit",
+    name: "Recent Sanitized Tool Audit Log",
+    description: "Recent metadata-only tool call audit entries stored in Durable Object SQLite.",
+    mimeType: "application/json"
+  }
+];
+
+export const RELAY_PROMPTS = [
+  {
+    name: "multi-device-triage",
+    description: "Inspect paired desktop devices, check online connectivity/latency, and route tasks across machines safely.",
+    arguments: [
+      { name: "task", description: "Optional goal or investigation to perform across paired devices", required: false }
+    ]
+  },
+  {
+    name: "safe-remote-maintenance",
+    description: "Perform remote desktop file or shell maintenance with read-only preflight, explicit device targeting, and audit review.",
+    arguments: [
+      { name: "target_device", description: "Target paired device name or ID", required: false },
+      { name: "operation", description: "Maintenance operation to execute", required: true }
+    ]
+  }
+];
+
 const RELAY_META_NAMES = new Set(RELAY_META_TOOLS.map((t) => t.name));
+const RELAY_PROMPT_NAMES = new Set(RELAY_PROMPTS.map((p) => p.name));
+
+const DEVICE_PARAM_SCHEMA = {
+  type: "string",
+  description: "Optional target paired device ID or name for this single call (overrides currently selected device)."
+};
 
 const json = (v, s = 200, extraHeaders = {}) =>
   new Response(JSON.stringify(v), {
@@ -175,42 +237,29 @@ function jsonRpcResult(id, payload, isError = false) {
   });
 }
 
-// Answer MCP `initialize` locally so a client can complete the handshake and then
-// discover/call the relay meta-tools even when no downstream device is online or when
-// multiple devices are online with none selected. Without this, the initial initialize
-// would be forwarded downstream and get a 503/409, leaving the client unable to select.
-export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
+function buildRelayInstructions(devices = []) {
+  const online = devices.filter((d) => d.online);
+  const selected = devices.find((d) => d.selected);
+  const deviceSummary = devices.length
+    ? devices
+        .map(
+          (d) =>
+            `${d.name} (${d.id.slice(0, 8)}…: ${d.online ? "ONLINE" : "offline"}, ${d.platform || "unknown"}${d.readOnly || d.clientMode === "READONLY" ? ", READONLY" : ""}${d.selected ? ", SELECTED" : ""})`
+        )
+        .join("; ")
+    : "none paired yet";
 
-function buildInitializeResult(rpc) {
-  const requested = rpc?.params?.protocolVersion;
-  // Negotiate only within versions the relay actually supports; never echo an unknown
-  // client-supplied version back as if it were supported.
-  const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS.includes(requested)
-    ? requested
-    : SUPPORTED_PROTOCOL_VERSIONS[0];
-  return {
-    protocolVersion,
-    capabilities: { tools: { listChanged: false } },
-    serverInfo: { name: "private-desktop-mcp-relay", version: WORKER_VERSION }
-  };
+  return (
+    `[Private Desktop MCP Relay v${WORKER_VERSION}] ` +
+    `Paired devices (${online.length}/${devices.length} online): ${deviceSummary}. ` +
+    (selected ? `Active target: ${selected.name} (${selected.id}). ` : "") +
+    "Multi-device controls: call `relay_list_devices` to inspect machines, `relay_select_device` to switch active target, `relay_ping_device` to test latency, `relay_set_device_policy` to toggle read-only locks, or pass `_device: \"<device_name_or_id>\"` on any tool call to target a specific machine without changing global selection. " +
+    "Resources `relay://devices`, `relay://status`, and `relay://audit` are always available."
+  );
 }
 
-function injectMetaToolsIntoBody(bodyText, contentType = "") {
-  const appendMissing = (obj) => {
-    if (!obj || typeof obj !== "object" || !Array.isArray(obj.result?.tools)) return null;
-    const existing = new Set(obj.result.tools.map((t) => t?.name));
-    const additions = RELAY_META_TOOLS.filter((t) => !existing.has(t.name));
-    if (additions.length === 0) return null;
-    return {
-      ...obj,
-      result: {
-        ...obj.result,
-        tools: [...obj.result.tools, ...additions]
-      }
-    };
-  };
-
-  if (String(contentType).toLowerCase().includes("text/event-stream")) {
+function transformRpcJsonOrSse(bodyText, contentType, transformObj) {
+  if (String(contentType || "").toLowerCase().includes("text/event-stream")) {
     let changed = false;
     const lines = String(bodyText || "").split(/\r?\n/);
     const updated = lines.map((line) => {
@@ -219,7 +268,7 @@ function injectMetaToolsIntoBody(bodyText, contentType = "") {
       if (!raw || raw === "[DONE]") return line;
       try {
         const parsed = JSON.parse(raw);
-        const merged = appendMissing(parsed);
+        const merged = transformObj(parsed);
         if (merged) {
           changed = true;
           return "data: " + JSON.stringify(merged);
@@ -234,11 +283,93 @@ function injectMetaToolsIntoBody(bodyText, contentType = "") {
 
   try {
     const parsed = JSON.parse(String(bodyText || ""));
-    const merged = appendMissing(parsed);
+    const merged = transformObj(parsed);
     return merged ? JSON.stringify(merged) : bodyText;
   } catch {
     return bodyText;
   }
+}
+
+function injectMetaToolsIntoBody(bodyText, contentType = "") {
+  return transformRpcJsonOrSse(bodyText, contentType, (obj) => {
+    if (!obj || typeof obj !== "object" || !Array.isArray(obj.result?.tools)) return null;
+    const augmentedUpstream = obj.result.tools.map((tool) => {
+      if (!tool || typeof tool !== "object" || RELAY_META_NAMES.has(tool.name)) return tool;
+      const schema = tool.inputSchema && typeof tool.inputSchema === "object" ? tool.inputSchema : { type: "object", properties: {} };
+      const props = schema.properties && typeof schema.properties === "object" ? schema.properties : {};
+      if (Object.hasOwn(props, "_device")) return tool;
+      return {
+        ...tool,
+        inputSchema: {
+          ...schema,
+          type: schema.type || "object",
+          properties: {
+            ...props,
+            _device: DEVICE_PARAM_SCHEMA
+          }
+        }
+      };
+    });
+    const existing = new Set(augmentedUpstream.map((t) => t?.name));
+    const additions = RELAY_META_TOOLS.filter((t) => !existing.has(t.name));
+    return {
+      ...obj,
+      result: {
+        ...obj.result,
+        tools: [...augmentedUpstream, ...additions]
+      }
+    };
+  });
+}
+
+function enrichInitializeBody(bodyText, contentType = "", devices = []) {
+  const relayNote = buildRelayInstructions(devices);
+  return transformRpcJsonOrSse(bodyText, contentType, (obj) => {
+    if (!obj || typeof obj !== "object" || !obj.result || typeof obj.result !== "object") return null;
+    const prevInstructions = typeof obj.result.instructions === "string" ? obj.result.instructions.trim() : "";
+    const capabilities = obj.result.capabilities && typeof obj.result.capabilities === "object" ? obj.result.capabilities : {};
+    return {
+      ...obj,
+      result: {
+        ...obj.result,
+        capabilities: {
+          ...capabilities,
+          tools: capabilities.tools || {},
+          resources: capabilities.resources || {},
+          prompts: capabilities.prompts || {}
+        },
+        instructions: prevInstructions ? `${relayNote}\n\n${prevInstructions}` : relayNote
+      }
+    };
+  });
+}
+
+function injectRelayResourcesIntoBody(bodyText, contentType = "") {
+  return transformRpcJsonOrSse(bodyText, contentType, (obj) => {
+    if (!obj || typeof obj !== "object" || !Array.isArray(obj.result?.resources)) return null;
+    const existing = new Set(obj.result.resources.map((r) => r?.uri));
+    const additions = RELAY_RESOURCES.filter((r) => !existing.has(r.uri));
+    return {
+      ...obj,
+      result: {
+        ...obj.result,
+        resources: [...RELAY_RESOURCES, ...obj.result.resources.filter((r) => ! !r && !RELAY_RESOURCES.some((rr) => rr.uri === r.uri))]
+      }
+    };
+  });
+}
+
+function injectRelayPromptsIntoBody(bodyText, contentType = "") {
+  return transformRpcJsonOrSse(bodyText, contentType, (obj) => {
+    if (!obj || typeof obj !== "object" || !Array.isArray(obj.result?.prompts)) return null;
+    return {
+      ...obj,
+      result: {
+        ...obj.result,
+        prompts: [...RELAY_PROMPTS, ...obj.result.prompts.filter((p) => !!p && !RELAY_PROMPT_NAMES.has(p.name))]
+      }
+    };
+  });
 }
 
 export function classifyRoute(url, env = {}) {
@@ -457,8 +588,19 @@ export class DeviceHub {
         return json({
           ok: true,
           version: WORKER_VERSION,
-          protocol: 2,
-          features: ["heartbeat", "meta-tools", "device-targeting", "cancel", "audit", "readonly-lock"]
+          protocol: 3,
+          features: [
+            "heartbeat",
+            "meta-tools",
+            "device-targeting",
+            "cancel",
+            "audit",
+            "readonly-lock",
+            "agent-native-discovery",
+            "mcp-resources",
+            "mcp-prompts",
+            "self-healing-errors"
+          ]
         });
       }
       if (p === "/relay/pair/start" && m === "POST") return this.pairStart(req);
@@ -903,6 +1045,41 @@ export class DeviceHub {
       return jsonRpcResult(rpc.id, pingRes, !pingRes.ok);
     }
 
+    if (name === "relay_set_device_policy") {
+      const query = args.device_id || args.device_name || (await this.ctx.storage.get("selected")) || "";
+      const resolved = await this.resolveDeviceQuery(query);
+      if (resolved.error) {
+        this.recordAudit({ actor, mcpMethod: "tools/call", mcpName: name, status: resolved.status, durationMs: Date.now() - started, ok: false, error: resolved.error });
+        return jsonRpcResult(rpc.id, { error: resolved.error }, true);
+      }
+      const key = "device:" + resolved.device.id;
+      const stored = await this.ctx.storage.get(key);
+      if (!stored) return jsonRpcResult(rpc.id, { error: "Unknown device" }, true);
+
+      const updated = {
+        ...stored,
+        ...(typeof args.read_only === "boolean" ? { readOnly: args.read_only } : {}),
+        ...(typeof args.new_name === "string" && args.new_name.trim() ? { name: sanitizeLabel(args.new_name, stored.name, 40) } : {})
+      };
+      await this.ctx.storage.put(key, updated);
+      this.recordAudit({
+        actor,
+        deviceId: updated.id,
+        deviceName: updated.name,
+        mcpMethod: "tools/call",
+        mcpName: name,
+        status: 200,
+        durationMs: Date.now() - started,
+        ok: true
+      });
+      return jsonRpcResult(rpc.id, {
+        deviceId: updated.id,
+        name: updated.name,
+        readOnly: Boolean(updated.readOnly),
+        online: resolved.device.online
+      });
+    }
+
     if (name === "relay_recent_activity") {
       const entries = this.listAudit(args.limit ?? 20);
       this.recordAudit({ actor, mcpMethod: "tools/call", mcpName: name, status: 200, durationMs: Date.now() - started, ok: true });
@@ -912,9 +1089,162 @@ export class DeviceHub {
     return jsonRpcResult(rpc.id, { error: "Unknown relay tool" }, true);
   }
 
+  async handleRelayResourceRead(rpc, actor, verified = false) {
+    const started = Date.now();
+    const uri = String(rpc?.params?.uri || "");
+    const devices = await this.list();
+    let payload = null;
+
+    if (uri === "relay://devices") {
+      payload = {
+        workerVersion: WORKER_VERSION,
+        onlineCount: devices.filter((d) => d.online).length,
+        selectedDeviceId: devices.find((d) => d.selected)?.id || null,
+        devices
+      };
+    } else if (uri === "relay://status") {
+      payload = {
+        ok: true,
+        workerVersion: WORKER_VERSION,
+        protocol: 3,
+        accessJwtVerified: verified,
+        actor,
+        onlineCount: devices.filter((d) => d.online).length,
+        pairedCount: devices.length,
+        selectedDeviceId: devices.find((d) => d.selected)?.id || null
+      };
+    } else if (uri === "relay://audit") {
+      const entries = this.listAudit(30);
+      payload = { count: entries.length, entries };
+    } else {
+      return null;
+    }
+
+    this.recordAudit({ actor, mcpMethod: "resources/read", mcpName: uri, status: 200, durationMs: Date.now() - started, ok: true });
+    return json({
+      jsonrpc: "2.0",
+      id: rpc?.id ?? null,
+      result: {
+        contents: [
+          {
+            uri,
+            mimeType: "application/json",
+            text: JSON.stringify(payload, null, 2)
+          }
+        ]
+      }
+    });
+  }
+
+  async handleRelayPromptGet(rpc, actor) {
+    const started = Date.now();
+    const name = String(rpc?.params?.name || "");
+    if (!RELAY_PROMPT_NAMES.has(name)) return null;
+    const args = rpc?.params?.arguments && typeof rpc.params.arguments === "object" ? rpc.params.arguments : {};
+    const devices = await this.list();
+    const instructions = buildRelayInstructions(devices);
+
+    let promptText = "";
+    if (name === "multi-device-triage") {
+      promptText =
+        `${instructions}\n\n` +
+        "Follow this multi-device triage workflow:\n" +
+        "1. Call `relay_list_devices` to inspect all paired devices, their OS/platform, read-only state, and online status.\n" +
+        "2. For each online device relevant to the user's goal, call `relay_ping_device` to verify WebSocket RTT and local gateway readiness.\n" +
+        "3. Use `_device: \"<device_name_or_id>\"` on read-only tool calls (`read_file`, `list_directory`, `list_processes`) to compare or gather evidence across machines without mutating global selection.\n" +
+        (args.task ? `\nUser task: ${args.task}` : "");
+    } else if (name === "safe-remote-maintenance") {
+      promptText =
+        `${instructions}\n\n` +
+        "Follow this safe remote maintenance workflow:\n" +
+        `1. Confirm the target device (${args.target_device || "currently selected device"}) via \`relay_list_devices\` and verify it is online and not locked in read-only mode.\n` +
+        "2. Run read-only discovery (`list_directory`, `read_file`, `get_file_info`, `list_processes`) before making any modification.\n" +
+        "3. Present the exact paths or commands to the user if an operation is destructive.\n" +
+        "4. After execution, verify the outcome and call `relay_recent_activity` to confirm a clean audit trail.\n" +
+        (args.operation ? `\nRequested operation: ${args.operation}` : "");
+    }
+
+    this.recordAudit({ actor, mcpMethod: "prompts/get", mcpName: name, status: 200, durationMs: Date.now() - started, ok: true });
+    return json({
+      jsonrpc: "2.0",
+      id: rpc?.id ?? null,
+      result: {
+        description: RELAY_PROMPTS.find((p) => p.name === name)?.description || name,
+        messages: [
+          {
+            role: "user",
+            content: { type: "text", text: promptText }
+          }
+        ]
+      }
+    });
+  }
+
+  async buildEdgeInitializeResponse(rpc) {
+    const devices = await this.list();
+    const requestedVersion = rpc?.params?.protocolVersion;
+    const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS.includes(requestedVersion)
+      ? requestedVersion
+      : SUPPORTED_PROTOCOL_VERSIONS[0];
+    const result = {
+      protocolVersion,
+      capabilities: {
+        tools: { listChanged: false },
+        resources: {},
+        prompts: {}
+      },
+      serverInfo: {
+        name: "private-desktop-mcp-relay",
+        version: WORKER_VERSION
+      },
+      instructions: buildRelayInstructions(devices)
+    };
+    return json({ jsonrpc: "2.0", id: rpc?.id ?? null, result });
+  }
+
+  async buildSelfHealingDeviceError(rpc, reasonCode, humanMessage, status) {
+    const devices = await this.list();
+    const onlineDevices = devices.filter((d) => d.online).map((d) => ({ id: d.id, name: d.name, platform: d.platform, readOnly: d.readOnly }));
+    const selectedDeviceId = devices.find((d) => d.selected)?.id || null;
+    const nextActions =
+      onlineDevices.length > 1
+        ? [
+            `Call relay_select_device with one of the online devices: ${onlineDevices.map((d) => `${d.name} (${d.id})`).join(", ")}`,
+            'Or pass `_device: "<device_name_or_id>"` in the tool call arguments to target a specific machine directly.'
+          ]
+        : onlineDevices.length === 1
+          ? [
+              `Call relay_select_device with device_id "${onlineDevices[0].id}" (${onlineDevices[0].name}), or pass \`_device: "${onlineDevices[0].name}"\`.`
+            ]
+          : [
+              "No paired desktop device is currently online.",
+              "Ask the user to start the connector on their computer: `npx.cmd --yes --prefer-online --package=@juexibobi/private-desktop-mcp@latest -- private-desktop-mcp connect`",
+              "Call `relay_list_devices` to check when the device comes online."
+            ];
+
+    if (rpc && rpc.method === "tools/call") {
+      return jsonRpcResult(
+        rpc.id,
+        {
+          error: humanMessage,
+          errorCode: reasonCode,
+          httpStatus: status,
+          selectedDeviceId,
+          onlineDevices,
+          pairedDevicesCount: devices.length,
+          nextActions
+        },
+        true
+      );
+    }
+
+    return json({ error: humanMessage, errorCode: reasonCode, onlineDevices, nextActions }, status);
+  }
+
   async proxy(req, forcedId = null) {
     const started = Date.now();
     const actor = req.headers.get("x-pcc-actor") || "owner";
+    const verified = req.headers.get("x-pcc-verified") === "1";
     const bodyText = req.method === "DELETE" ? "" : await req.text();
     if (bodyText.length > 1048576) return new Response("Too large", { status: 413 });
 
@@ -933,9 +1263,17 @@ export class DeviceHub {
         ? rpc.params.name
         : req.headers.get("mcp-name") || "";
 
-    // 1. Handle built-in relay management meta-tools directly at the edge
+    // 1. Handle built-in relay management meta-tools, relay:// resources, and relay prompts directly at the edge
     if (mcpMethod === "tools/call" && RELAY_META_NAMES.has(mcpName)) {
       return this.handleMetaToolCall(rpc, actor);
+    }
+    if (mcpMethod === "resources/read" && String(rpc?.params?.uri || "").startsWith("relay://")) {
+      const res = await this.handleRelayResourceRead(rpc, actor, verified);
+      if (res) return res;
+    }
+    if (mcpMethod === "prompts/get" && RELAY_PROMPT_NAMES.has(String(rpc?.params?.name || ""))) {
+      const res = await this.handleRelayPromptGet(rpc, actor);
+      if (res) return res;
     }
 
     // 2. Resolve target device (supports explicit _device argument or X-Target-Device header)
@@ -965,47 +1303,65 @@ export class DeviceHub {
       const resolved = await this.resolveDeviceQuery(targetQuery);
       if (resolved.error) {
         this.recordAudit({ actor, mcpMethod, mcpName, status: resolved.status, durationMs: Date.now() - started, ok: false, error: resolved.error });
-        return json({ error: resolved.error }, resolved.status);
+        return this.buildSelfHealingDeviceError(rpc, "DEVICE_TARGET_ERROR", resolved.error, resolved.status);
       }
       id = resolved.device.id;
     }
 
     if (!id) {
       id = selected;
-      if (id && !online.has(id) && online.size === 1) id = online.keys().next().value;
+      if ((!id || !online.has(id)) && online.size === 1) id = online.keys().next().value;
     }
 
-    // Answer initialize locally when there is no clear online target so the client can
-    // still complete the handshake and discover relay meta-tools (see buildInitializeResult).
-    if ((mcpMethod === "initialize" || mcpMethod === "notifications/initialized") && (!id || !online.has(id))) {
-      if (mcpMethod === "notifications/initialized") {
-        // Notifications have no JSON-RPC id and must not receive a JSON-RPC result, but
-        // the local handshake still needs to accept them so the client can proceed.
-        this.recordAudit({ actor, mcpMethod, mcpName: "", status: 202, durationMs: Date.now() - started, ok: true });
-        return new Response(null, { status: 202 });
+    // 3. Edge-native fallback for MCP lifecycle & discovery when no single target device is online/selected
+    if (!id || !online.has(id)) {
+      if (mcpMethod === "initialize" || mcpMethod === "server/discover") {
+        this.recordAudit({ actor, mcpMethod, mcpName, status: 200, durationMs: Date.now() - started, ok: true });
+        return this.buildEdgeInitializeResponse(rpc);
       }
-      this.recordAudit({ actor, mcpMethod, mcpName: "", status: 200, durationMs: Date.now() - started, ok: true });
-      return json({ jsonrpc: "2.0", id: rpc?.id ?? null, result: buildInitializeResult(rpc) });
-    }
-
-    // If tools/list arrives with 0 devices online or ambiguous multi-device selection, still return relay meta-tools!
-    if (mcpMethod === "tools/list" && (!id || !online.has(id))) {
-      this.recordAudit({ actor, mcpMethod, mcpName, status: 200, durationMs: Date.now() - started, ok: true });
-      return json({ jsonrpc: "2.0", id: rpc?.id ?? null, result: { tools: RELAY_META_TOOLS } });
+      if (mcpMethod === "notifications/initialized") {
+        this.recordAudit({ actor, mcpMethod, mcpName: "", status: 202, durationMs: Date.now() - started, ok: true });
+        return new Response(null, { status: 202, headers: { "cache-control": "no-store" } });
+      }
+      if (mcpMethod === "ping") {
+        return json({ jsonrpc: "2.0", id: rpc?.id ?? null, result: {} });
+      }
+      if (mcpMethod === "tools/list") {
+        this.recordAudit({ actor, mcpMethod, mcpName, status: 200, durationMs: Date.now() - started, ok: true });
+        return json({ jsonrpc: "2.0", id: rpc?.id ?? null, result: { tools: RELAY_META_TOOLS } });
+      }
+      if (mcpMethod === "resources/list") {
+        this.recordAudit({ actor, mcpMethod, mcpName, status: 200, durationMs: Date.now() - started, ok: true });
+        return json({ jsonrpc: "2.0", id: rpc?.id ?? null, result: { resources: RELAY_RESOURCES } });
+      }
+      if (mcpMethod === "prompts/list") {
+        this.recordAudit({ actor, mcpMethod, mcpName, status: 200, durationMs: Date.now() - started, ok: true });
+        return json({ jsonrpc: "2.0", id: rpc?.id ?? null, result: { prompts: RELAY_PROMPTS } });
+      }
     }
 
     if (id && !online.has(id)) {
       this.recordAudit({ actor, deviceId: id, mcpMethod, mcpName, status: 503, durationMs: Date.now() - started, ok: false, error: "Selected device offline" });
-      return json({ error: "Selected device offline; call relay_list_devices or check /admin/devices" }, 503);
+      return this.buildSelfHealingDeviceError(
+        rpc,
+        "SELECTED_DEVICE_OFFLINE",
+        "Selected device offline; call relay_list_devices or check /admin/devices",
+        503
+      );
     }
     if (!id) {
       if (!online.size) {
         this.recordAudit({ actor, mcpMethod, mcpName, status: 503, durationMs: Date.now() - started, ok: false, error: "No device online" });
-        return json({ error: "No device online" }, 503);
+        return this.buildSelfHealingDeviceError(rpc, "NO_DEVICE_ONLINE", "No device online", 503);
       }
       if (online.size > 1) {
         this.recordAudit({ actor, mcpMethod, mcpName, status: 409, durationMs: Date.now() - started, ok: false, error: "Multiple devices online" });
-        return json({ error: "Multiple devices online; call relay_select_device or select at /admin/devices" }, 409);
+        return this.buildSelfHealingDeviceError(
+          rpc,
+          "MULTIPLE_DEVICES_ONLINE",
+          "Multiple devices online; call relay_select_device, pass _device, or select at /admin/devices",
+          409
+        );
       }
       id = online.keys().next().value;
     }
@@ -1013,9 +1369,9 @@ export class DeviceHub {
     const storedDevice = await this.ctx.storage.get("device:" + id);
     const deviceName = storedDevice?.name || online.get(id)?.meta?.name || "";
 
-    // 3. Edge read-only lock check before crossing WebSocket
+    // 4. Edge read-only lock check before crossing WebSocket
     if (storedDevice?.readOnly && mcpMethod === "tools/call" && !READONLY_UPSTREAM_TOOLS.has(mcpName)) {
-      const msg = `Blocked by relay: device "${deviceName || id}" is locked in read-only mode (toggle at /admin/devices).`;
+      const msg = `Blocked by relay: device "${deviceName || id}" is locked in read-only mode (call relay_set_device_policy or toggle at /admin/devices).`;
       this.recordAudit({ actor, deviceId: id, deviceName, mcpMethod, mcpName, status: 403, durationMs: Date.now() - started, ok: false, error: "Device read-only lock" });
       return jsonRpcResult(rpc?.id ?? null, msg, true);
     }
@@ -1082,8 +1438,17 @@ export class DeviceHub {
 
     let responseBody = [202, 204].includes(res.status) ? null : String(res.body || "");
     const resContentType = res.headers?.["content-type"] || "";
-    if (responseBody && mcpMethod === "tools/list" && res.status >= 200 && res.status < 300) {
-      responseBody = injectMetaToolsIntoBody(responseBody, resContentType);
+    if (responseBody && res.status >= 200 && res.status < 300) {
+      if (mcpMethod === "tools/list") {
+        responseBody = injectMetaToolsIntoBody(responseBody, resContentType);
+      } else if (mcpMethod === "initialize" || mcpMethod === "server/discover") {
+        const devices = await this.list();
+        responseBody = enrichInitializeBody(responseBody, resContentType, devices);
+      } else if (mcpMethod === "resources/list") {
+        responseBody = injectRelayResourcesIntoBody(responseBody, resContentType);
+      } else if (mcpMethod === "prompts/list") {
+        responseBody = injectRelayPromptsIntoBody(responseBody, resContentType);
+      }
     }
 
     const ok = res.status >= 200 && res.status < 400;

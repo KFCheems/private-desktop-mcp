@@ -1,6 +1,6 @@
 {
   "name": "@juexibobi/private-desktop-mcp",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Private multi-device Desktop Commander MCP connector for Cloudflare Workers with paired WebSocket relays",
   "license": "MIT",
   "type": "module",
@@ -16,7 +16,11 @@
     "bin/proxy.mjs",
     "bin/logging.mjs",
     "bin/policy.mjs",
+    "bin/client-setup.mjs",
     "gateway.mjs",
+    "skills/private-desktop-mcp/SKILL.md",
+    "docs/agent-install.md",
+    "AGENTS.md",
     "README.md",
     "LICENSE"
   ],
@@ -26,7 +30,7 @@
   },
   "homepage": "https://github.com/KFCheems/private-desktop-mcp",
   "scripts": {
-    "test": "node --check bin/cli.mjs && node --check bin/policy.mjs && node --check bin/proxy.mjs && node --check gateway.mjs && node --check worker/index.mjs && node --check worker/auth.mjs && node --test tests/*.test.mjs"
+    "test": "node --check bin/cli.mjs && node --check bin/policy.mjs && node --check bin/client-setup.mjs && node --check bin/proxy.mjs && node --check gateway.mjs && node --check worker/index.mjs && node --check worker/auth.mjs && node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.3.1",
