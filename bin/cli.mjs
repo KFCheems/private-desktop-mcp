@@ -28,13 +28,14 @@ import {
   redactOutboundResponse,
   buildPolicyBlockedResponse
 } from "./policy.mjs";
+import { SUPPORTED_CLIENTS, configureMcpClient } from "./client-setup.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const PKG_VERSION = (() => {
   try {
-    return JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version || "0.4.0";
+    return JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version || "0.5.0";
   } catch {
-    return "0.4.0";
+    return "0.5.0";
   }
 })();
 
@@ -44,12 +45,17 @@ const MAX_GATEWAY_LOG_BYTES = 5 * 1024 * 1024;
 
 function parseArgs(argv) {
   let command = "";
+  let subarg = "";
   let relay = process.env.PCC_RELAY_URL || DEFAULT_RELAY;
   let port = Number(process.env.MCP_PORT || 8717);
   let deviceName = os.hostname();
   let readonly = /^(1|true|yes)$/i.test(String(process.env.PCC_READONLY || ""));
   let dlp = !/^(0|false|no)$/i.test(String(process.env.PCC_DLP || "true"));
   let autoOpen = true;
+  let jsonOutput = false;
+  let dryRun = false;
+  let targetClient = "";
+  let clientConfigPath = "";
   let serversConfig = process.env.PCC_MCP_CONFIG || "";
   const allowDirs = String(process.env.PCC_ALLOW_DIRS || "")
     .split(path.delimiter)
@@ -68,6 +74,7 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (!arg.startsWith("-")) {
       if (!command) command = arg;
+      else if (!subarg) subarg = arg;
       continue;
     }
     const eq = arg.indexOf("=");
@@ -82,6 +89,10 @@ function parseArgs(argv) {
     else if (flag === "--readonly") readonly = true;
     else if (flag === "--no-dlp") dlp = false;
     else if (flag === "--no-open") autoOpen = false;
+    else if (flag === "--json") jsonOutput = true;
+    else if (flag === "--dry-run") dryRun = true;
+    else if (flag === "--client") targetClient = nextVal();
+    else if (flag === "--config") clientConfigPath = nextVal();
     else if (flag === "--servers") serversConfig = nextVal();
     else if (flag === "--allow-dir") {
       const v = nextVal().trim();
@@ -95,12 +106,17 @@ function parseArgs(argv) {
 
   return {
     command: command || "connect",
+    subarg,
     relay: relay.replace(/\/+$/, ""),
     port,
     deviceName: deviceName || "Desktop",
     readonly,
     dlp,
     autoOpen,
+    json: jsonOutput,
+    dryRun,
+    targetClient: targetClient || subarg,
+    clientConfigPath,
     serversConfig,
     allowDirs,
     allowTools,
@@ -263,15 +279,28 @@ async function post(route, data) {
 async function pair() {
   const v = await post("/relay/pair/start", { name: opts.deviceName });
   logLine("info", "🔑 New device pairing requested");
-  console.log(
-    "\nNEW DEVICE: " +
-      opts.deviceName +
-      "\nPAIRING CODE: " +
-      v.code +
-      "\nPlease visit " +
-      v.approvalUrl +
-      " and approve the matching code.\nWaiting for approval (60 minutes)...\n"
-  );
+  if (opts.json) {
+    console.log(
+      JSON.stringify({
+        event: "pairing_required",
+        deviceName: opts.deviceName,
+        code: v.code,
+        approvalUrl: v.approvalUrl,
+        pairId: v.pairId,
+        expiresIn: v.expiresIn || 3600
+      })
+    );
+  } else {
+    console.log(
+      "\nNEW DEVICE: " +
+        opts.deviceName +
+        "\nPAIRING CODE: " +
+        v.code +
+        "\nPlease visit " +
+        v.approvalUrl +
+        " and approve the matching code.\nWaiting for approval (60 minutes)...\n"
+    );
+  }
   tryOpenBrowser(v.approvalUrl);
   for (let i = 0; i < 720 && !stopping; i++) {
     await sleep(5000);
@@ -286,6 +315,9 @@ async function pair() {
       const credentials = { deviceId: r.deviceId, token: r.token };
       store(credentials);
       logLine("info", "✅ Device approved; credentials saved locally.");
+      if (opts.json) {
+        console.log(JSON.stringify({ event: "pairing_approved", deviceId: r.deviceId, deviceName: opts.deviceName }));
+      }
       return credentials;
     }
   }
@@ -716,22 +748,19 @@ async function connect(creds, { onHealthy } = {}) {
 
 async function runDoctor() {
   let healthy = true;
-  console.log(`Private Desktop MCP Doctor (v${PKG_VERSION})`);
-  console.log("─".repeat(48));
-  console.log("Node.js:", process.version, `(${process.platform}/${process.arch})`);
-  console.log("Relay URL:", opts.relay);
-
+  let proxyInfo = { mode: "unknown", source: "unknown" };
   let transport = {};
   try {
     const p = resolveProxyForUrl(opts.relay);
-    console.log("Proxy:", p.mode === "proxy" ? `${p.source} (${p.description})` : `${p.mode} (${p.source}${p.reason ? ": " + p.reason : ""})`);
+    proxyInfo = { mode: p.mode, source: p.source, description: p.description || "", reason: p.reason || "" };
     if (p.mode === "unsupported") healthy = false;
     else if (p.mode === "proxy") transport = { dispatcher: new ProxyAgent(p.url) };
   } catch (e) {
-    console.log("Proxy: error -", e.message);
+    proxyInfo = { mode: "error", source: "system", reason: e.message };
     healthy = false;
   }
 
+  let relayStatus = { ok: false };
   try {
     const t0 = Date.now();
     const res = await fetch(opts.relay + "/relay/status", {
@@ -739,22 +768,77 @@ async function runDoctor() {
       ...transport
     });
     const body = await res.json();
-    console.log(
-      `Relay Status: OK (HTTP ${res.status}, ${Date.now() - t0}ms, worker v${body.version || "unknown"}, features: ${(body.features || []).join(",") || "legacy"})`
-    );
+    relayStatus = {
+      ok: res.ok && Boolean(body?.ok),
+      httpStatus: res.status,
+      latencyMs: Date.now() - t0,
+      workerVersion: body?.version || "unknown",
+      protocol: body?.protocol || 1,
+      features: Array.isArray(body?.features) ? body.features : []
+    };
+    if (!relayStatus.ok) healthy = false;
   } catch (e) {
-    console.log("Relay Status: UNREACHABLE -", sanitizeText(e.message, 140));
+    relayStatus = { ok: false, error: sanitizeText(e.message, 140) };
     healthy = false;
   }
 
   const creds = saved();
-  console.log("Device Pairing:", creds ? `paired (id=${String(creds.deviceId || "").slice(0, 8)}…)` : "not paired");
+  let localPortOccupied = false;
+  let localHttpStatus = 0;
   try {
-    const st = (await fetch(localBaseUrl, { signal: AbortSignal.timeout(1500) })).status;
-    console.log(`Local Port ${opts.port}: occupied (HTTP ${st})`);
+    localHttpStatus = (await fetch(localBaseUrl, { signal: AbortSignal.timeout(1500) })).status;
+    localPortOccupied = localHttpStatus > 0;
   } catch {
-    console.log(`Local Port ${opts.port}: free`);
+    localPortOccupied = false;
   }
+
+  if (opts.json) {
+    console.log(
+      JSON.stringify(
+        {
+          ok: healthy,
+          version: PKG_VERSION,
+          runtime: { node: process.version, platform: process.platform, arch: process.arch },
+          relay: opts.relay,
+          proxy: proxyInfo,
+          relayStatus,
+          paired: Boolean(creds?.deviceId),
+          deviceId: creds?.deviceId ? String(creds.deviceId).slice(0, 8) + "…" : null,
+          localPort: opts.port,
+          localPortOccupied,
+          policy: {
+            readonly: policy.readonly,
+            dlp: policy.dlp,
+            allowDirsCount: policy.allowDirs.length
+          }
+        },
+        null,
+        2
+      )
+    );
+    if (!healthy) process.exitCode = 1;
+    return;
+  }
+
+  console.log(`Private Desktop MCP Doctor (v${PKG_VERSION})`);
+  console.log("─".repeat(48));
+  console.log("Node.js:", process.version, `(${process.platform}/${process.arch})`);
+  console.log("Relay URL:", opts.relay);
+  console.log(
+    "Proxy:",
+    proxyInfo.mode === "proxy"
+      ? `${proxyInfo.source} (${proxyInfo.description})`
+      : `${proxyInfo.mode} (${proxyInfo.source}${proxyInfo.reason ? ": " + proxyInfo.reason : ""})`
+  );
+  if (relayStatus.ok) {
+    console.log(
+      `Relay Status: OK (HTTP ${relayStatus.httpStatus}, ${relayStatus.latencyMs}ms, worker v${relayStatus.workerVersion}, features: ${relayStatus.features.join(",") || "legacy"})`
+    );
+  } else {
+    console.log("Relay Status: UNREACHABLE -", relayStatus.error || `HTTP ${relayStatus.httpStatus || 0}`);
+  }
+  console.log("Device Pairing:", creds ? `paired (id=${String(creds.deviceId || "").slice(0, 8)}…)` : "not paired");
+  console.log(`Local Port ${opts.port}:`, localPortOccupied ? `occupied (HTTP ${localHttpStatus})` : "free");
   console.log("Policy:", policy.readonly ? "READONLY" : "FULL", "| DLP:", policy.dlp ? "ON" : "OFF");
   if (!healthy) process.exitCode = 1;
 }
@@ -797,6 +881,50 @@ function runReport() {
   console.log(JSON.stringify(report, null, 2));
 }
 
+function runSetupClient() {
+  const target = String(opts.targetClient || "").toLowerCase().trim();
+  if (!target) {
+    const msg = `Specify a target client: ${SUPPORTED_CLIENTS.join(", ")} or "all"`;
+    if (opts.json) console.log(JSON.stringify({ ok: false, error: msg, supportedClients: SUPPORTED_CLIENTS }, null, 2));
+    else console.error(msg);
+    process.exitCode = 2;
+    return;
+  }
+
+  const clients = target === "all" ? SUPPORTED_CLIENTS : [target];
+  const results = [];
+  for (const client of clients) {
+    try {
+      const res = configureMcpClient({
+        client,
+        relayUrl: opts.relay,
+        configPath: clients.length === 1 && opts.clientConfigPath ? opts.clientConfigPath : undefined,
+        dryRun: opts.dryRun
+      });
+      results.push(res);
+    } catch (e) {
+      results.push({ ok: false, client, error: e.message });
+      process.exitCode = 1;
+    }
+  }
+
+  if (opts.json) {
+    console.log(JSON.stringify(clients.length === 1 ? results[0] : { ok: results.every((r) => r.ok), results }, null, 2));
+    return;
+  }
+
+  for (const r of results) {
+    if (!r.ok) {
+      console.error(`❌ [${r.client}] ${r.error}`);
+      continue;
+    }
+    console.log(`${r.dryRun ? "🔍 [DRY-RUN]" : "✅"} [${r.client}] ${r.action.toUpperCase()} → ${r.path}`);
+    if (r.dryRun) {
+      console.log(r.preview.trimEnd());
+    }
+  }
+}
+
 function stop() {
   if (stopping) return;
   stopping = true;
@@ -813,38 +941,78 @@ process.on("SIGTERM", stop);
 
 if (opts.command === "help") {
   console.log(
-    `Private Desktop MCP v${PKG_VERSION}: connect | status | doctor | report | reset\n` +
+    `Private Desktop MCP v${PKG_VERSION}: connect | status | doctor | report | setup-client | reset\n` +
+      "Subcommands:\n" +
+      "  connect                      Pair (if needed), start local gateway, and connect to relay\n" +
+      "  status [--json]              Check local pairing and gateway port state\n" +
+      "  doctor [--json]              End-to-end preflight check (proxy, relay health, pairing, port)\n" +
+      "  report [--json]              Generate sanitized JSON diagnostic bundle\n" +
+      `  setup-client <client|all>    Configure MCP client (${SUPPORTED_CLIENTS.join(", ")})\n` +
+      "  reset [--json]               Clear local device pairing credentials\n" +
       "Options:\n" +
-      "  --relay <url>          Custom Cloudflare Worker relay URL (env: PCC_RELAY_URL)\n" +
-      "  --port <port>          Local MCP gateway port (default: 8717, env: MCP_PORT)\n" +
-      "  --name <name>          Device display name when pairing (default: hostname)\n" +
-      "  --readonly             Allow read-only tools only and hide mutating tools\n" +
-      "  --allow-dir <dir>      Restrict file tool paths to allowed directories (repeatable)\n" +
-      "  --allow-tools <csv>    Explicit allowlist of MCP tool names\n" +
-      "  --deny-tools <csv>     Explicit denylist of MCP tool names\n" +
-      "  --servers <file.json>  Aggregate additional local stdio MCP servers (env: PCC_MCP_CONFIG)\n" +
-      "  --no-dlp               Disable outbound secret redaction on responses (enabled by default)\n" +
-      "  --no-open              Do not auto-open browser during device pairing\n" +
-      "  --safe | --debug | --trace  Terminal logging verbosity (default: TRACE)\n" +
+      "  --relay <url>                Custom Cloudflare Worker relay URL (env: PCC_RELAY_URL)\n" +
+      "  --port <port>                Local MCP gateway port (default: 8717, env: MCP_PORT)\n" +
+      "  --name <name>                Device display name when pairing (default: hostname)\n" +
+      "  --readonly                   Allow read-only tools only and hide mutating tools\n" +
+      "  --allow-dir <dir>            Restrict file tool paths to allowed directories (repeatable)\n" +
+      "  --allow-tools <csv>          Explicit allowlist of MCP tool names\n" +
+      "  --deny-tools <csv>           Explicit denylist of MCP tool names\n" +
+      "  --servers <file.json>        Aggregate additional local stdio MCP servers (env: PCC_MCP_CONFIG)\n" +
+      "  --no-dlp                     Disable outbound secret redaction on responses (enabled by default)\n" +
+      "  --no-open                    Do not auto-open browser during device pairing\n" +
+      "  --dry-run                    Preview client config changes without writing to disk (for setup-client)\n" +
+      "  --config <path>              Custom client config file path override (for setup-client)\n" +
+      "  --json                       Emit machine-readable JSON output for agents\n" +
+      "  --safe | --debug | --trace   Terminal logging verbosity (default: TRACE)\n" +
       `Default relay: ${DEFAULT_RELAY}\n` +
       `Approval page: ${opts.relay}/admin/devices\n` +
       "Ctrl+C to disconnect. No automatic startup."
   );
 } else if (opts.command === "status") {
-  console.log("Paired:", !!saved());
-  console.log("Relay:", opts.relay);
+  const creds = saved();
+  let localHttpStatus = null;
   try {
-    console.log("Local HTTP:", (await fetch(localBaseUrl, { signal: AbortSignal.timeout(2000) })).status);
+    localHttpStatus = (await fetch(localBaseUrl, { signal: AbortSignal.timeout(2000) })).status;
   } catch {
-    console.log("Local MCP offline");
+    localHttpStatus = null;
+  }
+  if (opts.json) {
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          version: PKG_VERSION,
+          paired: Boolean(creds?.deviceId),
+          deviceId: creds?.deviceId ? String(creds.deviceId).slice(0, 8) + "…" : null,
+          relay: opts.relay,
+          localPort: opts.port,
+          localGatewayRunning: localHttpStatus !== null,
+          localHttpStatus,
+          policy: { readonly: policy.readonly, dlp: policy.dlp }
+        },
+        null,
+        2
+      )
+    );
+  } else {
+    console.log("Paired:", !!creds);
+    console.log("Relay:", opts.relay);
+    if (localHttpStatus !== null) console.log("Local HTTP:", localHttpStatus);
+    else console.log("Local MCP offline");
   }
 } else if (opts.command === "doctor") {
   await runDoctor();
 } else if (opts.command === "report") {
   runReport();
+} else if (opts.command === "setup-client") {
+  runSetupClient();
 } else if (opts.command === "reset") {
   forget();
-  console.log("Local credentials cleared. Revoke old credentials in the admin page too.");
+  if (opts.json) {
+    console.log(JSON.stringify({ ok: true, cleared: true, configPath: config }, null, 2));
+  } else {
+    console.log("Local credentials cleared. Revoke old credentials in the admin page too.");
+  }
 } else if (opts.command === "connect") {
   logLine("info", `╔══════════════ PCC REMOTE v${PKG_VERSION} ══════════════╗`);
   logLine(

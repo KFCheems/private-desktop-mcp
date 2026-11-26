@@ -26,7 +26,11 @@ test("gateway and CLI imports are declared as direct dependencies and files are 
  const serverJson=JSON.parse(fs.readFileSync("server.json","utf8"));
  assert.equal(serverJson.version,pkg.version);
  assert.ok(pkg.files.includes("bin/policy.mjs"));
- for(const file of ["gateway.mjs","bin/cli.mjs","bin/policy.mjs","bin/proxy.mjs"]){
+ assert.ok(pkg.files.includes("bin/client-setup.mjs"));
+ assert.ok(pkg.files.includes("skills/private-desktop-mcp/SKILL.md"));
+ assert.ok(pkg.files.includes("AGENTS.md"));
+ assert.ok(pkg.files.includes("docs/agent-install.md"));
+ for(const file of ["gateway.mjs","bin/cli.mjs","bin/policy.mjs","bin/client-setup.mjs","bin/proxy.mjs"]){
   const source=fs.readFileSync(file,"utf8");
   for(const match of source.matchAll(/\bfrom\s+["']([^"']+)["']/g)){
    const spec=match[1];
@@ -35,6 +39,21 @@ test("gateway and CLI imports are declared as direct dependencies and files are 
    assert.ok(Object.hasOwn(pkg.dependencies,name),`${file} imports ${spec}, but ${name} is not a direct dependency`);
   }
  }
+});
+
+test("agent-native manifests and skill metadata are synchronized with package version",()=>{
+ const pkg=JSON.parse(fs.readFileSync("package.json","utf8"));
+ for(const manifestPath of ["plugin.json",".claude-plugin/plugin.json","gemini-extension.json",".antigravity-plugin/plugin.json"]){
+  const m=JSON.parse(fs.readFileSync(manifestPath,"utf8"));
+  assert.equal(m.version,pkg.version,`${manifestPath} version mismatch`);
+ }
+ const marketplace=JSON.parse(fs.readFileSync(".claude-plugin/marketplace.json","utf8"));
+ assert.equal(marketplace.plugins[0].name,"private-desktop-mcp");
+ const skill=fs.readFileSync("skills/private-desktop-mcp/SKILL.md","utf8");
+ assert.match(skill,/^---\r?\nname:\s*private-desktop-mcp/);
+ assert.ok(fs.existsSync("AGENTS.md"));
+ assert.ok(fs.existsSync("CLAUDE.md"));
+ assert.ok(fs.existsSync("docs/agent-install.md"));
 });
 
 test("CLI report outputs valid sanitized JSON diagnostics",()=>{
