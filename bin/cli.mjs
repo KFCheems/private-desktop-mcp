@@ -9,7 +9,7 @@ import WebSocket from "ws";
 import { ProxyAgent } from "undici";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { resolveProxyForUrl } from "./proxy.mjs";
-import { logLine, sanitizeText } from "./logging.mjs";
+import { logLine, sanitizeText, setStdoutMode } from "./logging.mjs";
 import {
   callInfo,
   requestBrief,
@@ -125,6 +125,8 @@ function parseArgs(argv) {
 }
 
 const opts = parseArgs(process.argv.slice(2));
+// In --json mode stdout is a machine-readable event stream; every human diagnostic goes to stderr.
+setStdoutMode(opts.json ? "json" : "text");
 const { trace, debug } = loggingOptions(process.argv.slice(2));
 const configDir = path.join(process.env.APPDATA || path.join(os.homedir(), ".config"), "PrivateDesktopMCP");
 const config = path.join(configDir, "device.json");
@@ -664,7 +666,9 @@ async function connect(creds, { onHealthy } = {}) {
 
       logLine("info", "✅ Cloudflare relay connected in " + formatElapsed(Date.now() - opening));
       reportDevice(creds);
-      console.log("CONNECTED. Your AI client can now use this device. Ctrl+C to disconnect.");
+      const connectedLine = "CONNECTED. Your AI client can now use this device. Ctrl+C to disconnect.";
+      if (opts.json) console.error(connectedLine);
+      else console.log(connectedLine);
     });
 
     ws.on("pong", () => {

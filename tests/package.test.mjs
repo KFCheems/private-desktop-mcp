@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
+import {fileURLToPath} from "node:url";
 import {spawnSync} from "node:child_process";
 
 test("package entrypoints and canonical remote URL",()=>{
@@ -63,4 +65,22 @@ test("CLI report outputs valid sanitized JSON diagnostics",()=>{
  assert.equal(report.policy.readonly,true);
  assert.equal(report.policy.dlp,true);
  assert.ok(typeof report.version==="string"&&report.version.length>0);
+});
+
+test("Claude plugin manifests keep every component path inside the plugin root", () => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const manifests = [path.join(repoRoot, ".claude-plugin", "plugin.json"), path.join(repoRoot, "plugin.json")];
+  for (const manifestPath of manifests) {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const components = [manifest.mcpServers, ...(Array.isArray(manifest.skills) ? manifest.skills : [])];
+    assert.ok(components.length > 0, manifestPath);
+    for (const rel of components) {
+      assert.equal(typeof rel, "string", `${manifestPath} component must be a string`);
+      assert.ok(rel.startsWith("./"), `${rel} must start with "./"`);
+      assert.ok(!rel.split(/[\\/]/).includes(".."), `${rel} must not contain ".."`);
+      const resolved = path.resolve(repoRoot, rel);
+      assert.ok(resolved === repoRoot || resolved.startsWith(repoRoot + path.sep), `${rel} escapes ${repoRoot}`);
+      assert.ok(fs.existsSync(resolved), `${rel} does not exist`);
+    }
+  }
 });

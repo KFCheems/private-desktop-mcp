@@ -120,7 +120,16 @@ export function configureMcpClient({
   try {
     existingText = fs.readFileSync(targetPath, "utf8");
     existed = true;
-  } catch {
+  } catch (err) {
+    // Only a genuinely absent file is safe to treat as "create". Any other
+    // failure (EACCES, EISDIR, EIO, ...) must not be mistaken for absence, or
+    // the caller would overwrite a config it never read.
+    if (err?.code !== "ENOENT") {
+      throw new Error(
+        `Cannot read existing config at ${targetPath} (${err?.code || "UNKNOWN"}): ${err?.message || err}`,
+        { cause: err }
+      );
+    }
     existingText = "";
     existed = false;
   }
