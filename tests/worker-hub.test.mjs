@@ -214,6 +214,21 @@ test("DeviceHub supports pairing, meta-tools, per-call _device targeting, edge r
     const emptyJson = await emptyList.json();
     assert.equal(emptyJson.result.tools.length, RELAY_META_TOOLS.length);
 
+    // 1b. With 0 devices online, initialize is answered locally so the client can
+    // complete the handshake and then discover relay meta-tools.
+    const emptyInit = await hub.fetch(
+      new Request(`${base}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-pcc-actor": "alice@example.com" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 11, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } })
+      })
+    );
+    assert.equal(emptyInit.status, 200);
+    const initJson = await emptyInit.json();
+    assert.equal(initJson.result.protocolVersion, "2025-06-18");
+    assert.equal(initJson.result.serverInfo.name, "private-desktop-mcp-relay");
+    assert.ok(initJson.result.capabilities.tools);
+
     // 2. Pair and connect two devices
     const receivedByA = [];
     const receivedByB = [];
@@ -263,6 +278,27 @@ test("DeviceHub supports pairing, meta-tools, per-call _device targeting, edge r
     );
     const selJson = await selRes.json();
     assert.equal(selJson.result.structuredContent.selected, devA.creds.deviceId);
+
+    // 4b. Multiple devices online with none selected yet: initialize must still succeed
+    // locally instead of returning 409, so the client can proceed to select a device.
+    const { hub: hub2, restore: restore2 } = createHubEnv();
+    try {
+      const base2 = "https://private-desktop-device-relay.ljx2043979076.workers.dev";
+      await pairAndConnect(hub2, "HomeA");
+      await pairAndConnect(hub2, "HomeB");
+      const initRes2 = await hub2.fetch(
+        new Request(`${base2}/mcp`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-pcc-actor": "alice@example.com" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 12, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } })
+        })
+      );
+      assert.equal(initRes2.status, 200);
+      const initJson2 = await initRes2.json();
+      assert.equal(initJson2.result.serverInfo.name, "private-desktop-mcp-relay");
+    } finally {
+      restore2();
+    }
 
     // 5. tools/list against WorkPC appends RELAY_META_TOOLS to upstream tools
     const mergedToolsRes = await hub.fetch(
@@ -359,6 +395,78 @@ test("DeviceHub supports pairing, meta-tools, per-call _device targeting, edge r
     assert.equal((await hub.list()).length, 0);
     assert.equal(devA.serverWs.closed?.code, 1008);
     assert.equal(devB.serverWs.closed?.code, 1008);
+  } finally {
+    restore();
+  }
+});
+
+test("DeviceHub answers initialize locally with no devices online", async () => {
+  const { hub, restore } = createHubEnv();
+  const base = "https://private-desktop-device-relay.ljx2043979076.workers.dev";
+  try {
+    const res = await hub.fetch(
+      new Request(`${base}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-pcc-actor": "alice@example.com" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t", version: "1" } }
+        })
+      })
+    );
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.result.protocolVersion, "2024-11-05");
+    assert.ok(SUPPORTED_PROTOCOL_VERSIONS.includes(body.result.protocolVersion));
+  } finally {
+    restore();
+  }
+});
+
+test("DeviceHub accepts notifications/initialized locally with no devices online", async () => {
+  const { hub, storage, restore } = createHubEnv();
+  const base = "https://private-desktop-device-relay.ljx2043979076.workers.dev";
+  try {
+    const res = await hub.fetch(
+      new Request(`${base}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-pcc-actor": "alice@example.com" },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })
+      })
+    );
+    assert.equal(res.status, 202);
+    assert.equal(await res.text(), "");
+    const audit = storage.auditRows.at(-1);
+    assert.equal(audit.mcp_method, "notifications/initialized");
+    assert.equal(audit.status, 202);
+    assert.equal(Boolean(audit.ok), true);
+  } finally {
+    restore();
+  }
+});
+
+test("DeviceHub negotiates only supported MCP protocol versions", async () => {
+  const { hub, restore } = createHubEnv();
+  const base = "https://private-desktop-device-relay.ljx2043979076.workers.dev";
+  try {
+    const res = await hub.fetch(
+      new Request(`${base}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-pcc-actor": "alice@example.com" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "initialize",
+          params: { protocolVersion: "2099-01-01", capabilities: {}, clientInfo: { name: "t", version: "1" } }
+        })
+      })
+    );
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.result.protocolVersion, SUPPORTED_PROTOCOL_VERSIONS[0]);
+    assert.ok(SUPPORTED_PROTOCOL_VERSIONS.includes(body.result.protocolVersion));
   } finally {
     restore();
   }
